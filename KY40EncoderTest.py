@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 """
 KY40EncoderTest.py tests basic functionality of reading the KY-40
 Encoder with the RasPi
@@ -57,7 +58,7 @@ def ausgabeFunktion(channel):
         print("Current position: ", Counter)
         print("------------------------------")
 
-def CounterReset(channel):
+def CounterReset(channel): #pylint: disable=W0613
     """
     Reset the Counter
     """

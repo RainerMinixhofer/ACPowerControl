@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 # pylint: disable=C0103
 # coding=utf-8
 # Needed modules will be imported and configured
@@ -24,6 +25,10 @@ def FlankDetect(channel):
     """
     time.sleep(0.2) # Wait till bouncing ends
     channel_state = not GPIO.input(channel) #Button pin input is inverted
+    if channel_state:
+        print("LED is on and switch closed")
+    else:
+        print("LED is off and switch open")
     GPIO.output(LED_PIN, channel_state)
 
 # Initialize LED with right state of button
