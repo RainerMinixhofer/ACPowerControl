@@ -9,8 +9,22 @@ import time
 import RPi.GPIO as GPIO
 import smbus
 
-def switchsequence(gpa,gpb):
-    
+def switchsequence(gpa, gpb):
+    """
+
+    Parameters
+    ----------
+    gpa : hexadecimal
+        value to write into 0x14 register for relais setting of port gpa.
+    gpb : TYPE
+        value to write into 0x15 register for relais setting of port gpb.
+
+    Returns
+    -------
+    None.
+
+    """
+
     #Set relais positions for required voltage (with 220V mains still of)
     bus.write_byte_data(address, 0x14, gpa)
     bus.write_byte_data(address, 0x15, gpb)
