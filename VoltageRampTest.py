@@ -29,16 +29,16 @@ def switchsequence(gpa, gpb):
     bus.write_byte_data(address, 0x14, gpa)
     bus.write_byte_data(address, 0x15, gpb)
     #Wait for 100ms to settle any relais bouncing
-    time.sleep(0.1)
+    time.sleep(1.0)
     #Switch 220V mains on
     bus.write_byte_data(address, 0x15, gpb+1)
     #Wait 1 second to enable readout on voltmeter
-    time.sleep(1.0)
+    time.sleep(5.0)
     #Set all relais back to off
     bus.write_byte_data(address, 0x14, 0x00)
     bus.write_byte_data(address, 0x15, 0x00)
     #Wait for 100ms to settle any relais bouncing
-    time.sleep(0.1)
+    time.sleep(1.0)
 
 
 GPIO.setmode(GPIO.BCM)
