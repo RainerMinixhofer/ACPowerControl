@@ -9,6 +9,15 @@ Code has been rewritten by Rainer Minixhofer using properties
 
 import smbus #pylint: disable=E0401
 
+mcp23017registers = ["iodir", "ipol", "gpinten", "defval", "intcon", "iocon",\
+                     "gppu", "intf", "intcap", "gpio", "olat"]
+
+defaultpinconfig = {"gpioa0":"A2AC1", "gpioa1":"B2AC1", "gpioa2":"K2AC1", "gpioa3":"L2AC2", \
+                    "gpioa4":"M2AC2", "gpioa5":"N2AC2", "gpioa6":"L2D", "gpioa7":"D2K", \
+                    "gpiob0":"Mains", "gpiob1":"HalfMains1", "gpiob2":"HalfMains2", \
+                    "gpiob3":"B2L", "gpiob4":"C2M", "gpiob5":"D2N", "gpiob6":"A2K", \
+                    "gpiob7":"L2AC1"}
+
 class MCP23017:
     """
     Class for accessing the MCP23017 hardware
@@ -20,141 +29,164 @@ class MCP23017:
     specified in the pinconfig dictionary and the gpioa/gpiob standard pinname
     respectively.
     """
-    def __init__(self, i2cbus=1, device=0x20, bank=0, pinconfig={\
-        "gpioa0":"A2AC1", "gpioa1":"B2AC1", "gpioa2":"K2AC1", "gpioa3":"L2AC2", \
-        "gpioa4":"M2AC2", "gpioa5":"N2AC2", "gpioa6":"L2D", "gpioa7":"D2K", \
-        "gpiob0":"Mains", "gpiob1":"HalfMains1", "gpiob2":"HalfMains2", \
-        "gpiob3":"B2L", "gpiob4":"C2M", "gpiob5":"D2N", "gpiob6":"A2K", "gpiob7":"L2AC1"}):
+
+    def __init__(self, i2cbus=1, device=0x20, bank=0, pinconfig=defaultpinconfig): #pylint: disable=W0102
         self.device = device
         self.bus = smbus.SMBus(i2cbus)
         if bank == 0:
-            self.gpioa = {"gpioreg":0x12, "dirreg":0x00, "pureg":0x0c}
-            self.gpiob = {"gpioreg":0x13, "dirreg":0x01, "pureg":0x0d}
+            self.gpioa = {reg : 2*i for i,reg in enumerate(mcp23017registers)}
+            self.gpiob = {reg : 2*i+1 for i,reg in enumerate(mcp23017registers)}
         else:
-            self.gpioa = {"gpioreg":0x09, "dirreg":0x00, "pureg":0x06}
-            self.gpiob = {"gpioreg":0x19, "dirreg":0x10, "pureg":0x16}
-        self.gpiopins = {}
-        for key in pinconfig.keys():
-            self.gpiopins.update( { key: pin(self, register=key[:-1], bit=int(key[-1])) } )
-        self.pins = {pinconfig[key]: value for key, value in self.gpiopins.items()}
+            self.gpioa = {reg : i for i,reg in enumerate(mcp23017registers)}
+            self.gpiob = {reg : i + 0x10 for i,reg in enumerate(mcp23017registers)}
+        #Generate a reverse lookup dictionary to look up a pin name specification with
+        #the standardized port name and bit number (e.g. C2M -> gpiob4)
+        self.gpiopins = {value: key for key,value in pinconfig.items()}
+        #Set all pins to tri-state by default
+        self.setregister(self.registeraddr("iodira"), 0xFF)
+        self.setregister(self.registeraddr("iodirb"), 0xFF)
+        self.setregister(self.registeraddr("gppua"), 0x00)
+        self.setregister(self.registeraddr("gppub"), 0x00)
 
-class pin:
-    """
-    Class to access/control one port of the MCP23017 hardware
-    """
-    def __init__(self, ioexp, register="gpioa", bit=0):
-        self.__ioexp = ioexp
-        self.__register = register
-        if self.__register == "gpioa":
-            self.__ioreg = self.__ioexp.gpioa
-        else:
-            self.__ioreg = self.__ioexp.gpiob
-        self.__gpioregaddr = self.__ioreg["gpioreg"]
-        self.__dirregaddr = self.__ioreg["dirreg"]
-        self.__puregaddr = self.__ioreg["pureg"]
-        self.__bit = bit
-        #default to tri state
-        self.setx()
-    @property
-    def bit(self):
+    def registeraddr(self, register="iodira"):
         """
-        Property bit
+        Gets address of register named <register>
         """
-        return self.__bit
-    @bit.setter
-    def bit(self, newbit):
-        self.__bit = newbit
-    @property
-    def gpioregaddr(self):
+        assert (register[-1] in ["a", "b"]), "Register Port must be \"a\" or \"b\""
+        if register[-1] == "a":
+            return self.gpioa[register[:-1]]
+        return self.gpiob[register[:-1]]
+
+    def getregister(self, register="iodira", bit=None, pin=None):
         """
-        Yields address of GPIO Port Register. Read-Only
+        Reads content of register named <register>. If bit is not None
+        just the value of bit number <bit> ist returned.
+        If pin is not None, <register> and <bit> are derived from the pin
+        specification. If pin is specified register needs to be specified
+        without port spec (without "a" or "b" at the end)
         """
-        return self.__gpioregaddr
-    @property
-    def dirregaddr(self):
-        # """
-        # Property dirreg. Controls the direction of the data I/O.
-        # When a bit is set, the corresponding pin becomes an
-        # input. When a bit is clear, the corresponding pin
-        # becomes an output.
-        # """
+        if pin is not None:
+            port, bit = self.name2portbit(pin)
+            register = register + port
+        try:
+            value = self.bus.read_byte_data(self.device, self.registeraddr(register))
+        except OSError:
+            print("Error reading bus")
+            return None
+        if bit is not None:
+            return (value & 2**bit) >> bit
+        return value
+
+    def setregister(self, registeraddr, value=0xFF):
         """
-        Yields Address of I/O direction register. Read-Only
+        Sets content of register with address <registeraddr> to value.
         """
-        return self.__dirregaddr
-    @property
-    def puregaddr(self):
+        assert (0 <= value <= 0xFF), "Register is 8-bit value. Needs to be in range 0x00..0xFF"
+        try:
+            self.bus.write_byte_data(self.device, registeraddr, value)
+        except OSError:
+            print("Unable to write bus")
+
+    def enable_bit(self, registeraddr, bit=0):
         """
-        Yields Address of GPIO Pull-Up resistor register. Read-Only
+        Enables bit <bit> in register with address <registeraddr>
         """
-        # Property pureg. The GPPU register controls the pull-up resistors for the
-        # port pins. If a bit is set and the corresponding pin is
-        # configured as an input, the corresponding port pin is
-        # internally pulled up with a 100 kOhm resistor.
-        return self.__puregaddr
-    def enable(self):
+        assert (bit in range(8)), "Bit must be in the range 0..7"
+        try:
+            value_old = self.bus.read_byte_data(self.device, registeraddr)
+            newvalue = value_old | (1<<bit)
+        except OSError:
+            print("Unable to read bus")
+        try:
+            self.bus.write_byte_data(self.device, registeraddr, newvalue)
+        except OSError:
+            print("Unable to write bus")
+
+    def disable_bit(self, registeraddr, bit=0):
         """
-        enables port (setting it to output first)
+        Disables bit <bit> in register with address <registeraddr>
         """
-        self.disable_bit(self.__dirregaddr, self.__bit)
-        self.enable_bit(self.__gpioregaddr, self.__bit)
-        #print self.value
-    def disable(self):
+        assert (bit in range(8)), "Bit must be in the range 0..7"
+        try:
+            value_old = self.bus.read_byte_data(self.device, registeraddr)
+            newvalue = value_old & ~(1<<bit)
+        except OSError:
+            print("Unable to read bus")
+        try:
+            self.bus.write_byte_data(self.device, registeraddr, newvalue)
+        except OSError:
+            print("Unable to read bus")
+
+    def name2portbit(self, pin):
         """
-        Disables port (setting it to output first)
+        Helper function to look up the standardized <port> and <bit> settings from
+        the name of the pin assigned in the pinconfig dictionary
         """
-        self.disable_bit(self.__dirregaddr, self.__bit)
-        self.disable_bit(self.__gpioregaddr, self.__bit)
-    def setinput(self):
+
+        port, bit = self.gpiopins[pin][-2], int(self.gpiopins[pin][-1])
+        assert (port in ["a", "b"]), "Register Port must be \"a\" or \"b\" and not {}".format(port)
+        assert (bit in range(8)), "Bit must be in the range 0..7 is {}".format(bit)
+
+        return port, bit
+
+    def enable(self, port="a", bit=0, pin=None):
         """
-        Set port as input
+        enables bit <bit> of gpio port <port> (setting it to output first).
+        If <pin> is specified (not None) the <port> and <bit> settings are
+        derived from the gpiopins dictionary
         """
-        self.enable_bit(self.__dirregaddr, self.__bit)
-        self.enable_bit(self.__puregaddr, self.__bit)
-    def setx(self):
+        if pin is not None:
+            port, bit = self.name2portbit(pin)
+        self.disable_bit(self.registeraddr("iodir"+port), bit)
+        self.enable_bit(self.registeraddr("gpio"+port), bit)
+
+    def disable(self, port="a", bit=0, pin=None):
+        """
+        Disables bit <bit> of gpio port <port> (setting it to output first)
+        If <pin> is specified (not None) the <port> and <bit> settings are
+        derived from the gpiopins dictionary
+        """
+        if pin is not None:
+            port, bit = self.name2portbit(pin)
+        self.disable_bit(self.registeraddr("iodir"+port), bit)
+        self.disable_bit(self.registeraddr("gpio"+port), bit)
+
+    def setinput(self, port="a", bit=0, pin=None):
+        """
+        Set bit <bit> of gpio port <port> to input
+        If <pin> is specified (not None) the <port> and <bit> settings are
+        derived from the gpiopins dictionary
+        """
+        if pin is not None:
+            port, bit = self.name2portbit(pin)
+        self.enable_bit(self.registeraddr("iodir"+port), bit)
+        self.enable_bit(self.registeraddr("gppu"+port), bit)
+
+    def setx(self, port="a", bit=0, pin=None):
         """
         Tri state mode, input and pullup resistor off
+        If <pin> is specified (not None) the <port> and <bit> settings are
+        derived from the gpiopins dictionary
         """
+        if pin is not None:
+            port, bit = self.name2portbit(pin)
+        self.enable_bit(self.registeraddr("iodir"+port), bit)
+        self.disable_bit(self.registeraddr("gppu"+port), bit)
 
-        self.enable_bit(self.__dirregaddr, self.__bit)
-        self.disable_bit(self.__puregaddr, self.__bit)
-    def value(self):
+    def value(self, port="a", bit=0, pin=None):
         """
         Reads port binary status
+        If <pin> is specified (not None) the <port> and <bit> settings are
+        derived from the gpiopins dictionary
         """
+        if pin is not None:
+            port, bit = self.name2portbit(pin)
         try:
-            returnvalue = self.__ioexp.bus.read_byte_data(self.__ioexp.device, \
-                                                          self.__gpioregaddr) & 2**self.__bit
+            returnvalue = self.bus.read_byte_data(self.device, \
+                                                  self.registeraddr("gpio"+port)) & 2**bit
         except OSError:
             print("Error reading bus")
             return 3
         if returnvalue == 0:
             return 0
         return 1
-
-    def enable_bit(self, register, bit):
-        """
-        Enables bit <bit> in register <register>
-        """
-        try:
-            value_old = self.__ioexp.bus.read_byte_data(self.__ioexp.device, register)
-            newvalue = value_old | (1<<bit)
-        except OSError:
-            print("Unable to read bus")
-        try:
-            self.__ioexp.bus.write_byte_data(self.__ioexp.device, register, newvalue)
-        except OSError:
-            print("Unable to write bus")
-    def disable_bit(self, register, bit):
-        """
-        Disables bit <bit> in register <register>
-        """
-        try:
-            value_old = self.__ioexp.bus.read_byte_data(self.__ioexp.device, register)
-            newvalue = value_old & ~(1<<bit)
-        except OSError:
-            print("Unable to read bus")
-        try:
-            self.__ioexp.bus.write_byte_data(self.__ioexp.device, register, newvalue)
-        except OSError:
-            print("Unable to read bus")

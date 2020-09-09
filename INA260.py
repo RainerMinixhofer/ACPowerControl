@@ -60,7 +60,7 @@ W_per_Bit = 10.0 / 1000
 class INA260Controller:
     """
     Driver Class for TI INA260 Controller
-    
+
     address... Specifies I2C address of hardware
     channel... Specifies I2C channel of hardware
     The following settings can be found in the INA260 datasheet
@@ -70,8 +70,8 @@ class INA260Controller:
     meascont.. Measure continuiously (True) or triggered(False)
     measv..... True if Vbus to be measured
     measi..... True if Ish to be measured
-    alert..... Assign list of states given in ALERT list. Only one out of the 
-               over or under limits are allowed to be specified together with 
+    alert..... Assign list of states given in ALERT list. Only one out of the
+               over or under limits are allowed to be specified together with
                the conversion ready alert
     alertpol.. Polarity of alert pin
     alertlatch If 1 the alert stays latched if 0 it clears as soon as the alert criterion
@@ -86,7 +86,7 @@ class INA260Controller:
                divider.
     Rvbus..... Typical value for the VBUS input impedance as per datasheet for
                calculating the measured voltage when a series resistor is used.
-    
+
     """
 
     def __init__(self, address=0x40, channel=1, avg=1, vbusct=1100, ishct=1100, \
@@ -350,8 +350,7 @@ current or power has been specified"
         """
         if isinstance(bits, list):
             return sum(2**i for i in bits)
-        else:
-            return 2**bits
+        return 2**bits
 
     def __setbits(self, reg, bits, value):
         """
