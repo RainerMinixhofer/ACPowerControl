@@ -60,11 +60,38 @@ W_per_Bit = 10.0 / 1000
 class INA260Controller:
     """
     Driver Class for TI INA260 Controller
+    
+    address... Specifies I2C address of hardware
+    channel... Specifies I2C channel of hardware
+    The following settings can be found in the INA260 datasheet
+    avg....... Number of samples which get averaged before conversion ready is signaled
+    vbusct.... Vbus conversion time in us
+    ishct..... Ish conversion time in us
+    meascont.. Measure continuiously (True) or triggered(False)
+    measv..... True if Vbus to be measured
+    measi..... True if Ish to be measured
+    alert..... Assign list of states given in ALERT list. Only one out of the 
+               over or under limits are allowed to be specified together with 
+               the conversion ready alert
+    alertpol.. Polarity of alert pin
+    alertlatch If 1 the alert stays latched if 0 it clears as soon as the alert criterion
+               is not fulfilled anymore
+    alertlimit Specifies the alert limit in units of the alert selected in <alert>.
+               For Voltage or Power limits this specifies the true voltage measured
+               and not the Vbus pin voltage.
+    Rdiv1..... If a series resistor is connected to Vbus this specifies the value
+               of the resistor to calculate the measured voltage based on the
+               voltage divider rule. The voltage divider consists of Rdiv1
+               and Rvbus (see next). Is zero by default yielding no voltage
+               divider.
+    Rvbus..... Typical value for the VBUS input impedance as per datasheet for
+               calculating the measured voltage when a series resistor is used.
+    
     """
 
     def __init__(self, address=0x40, channel=1, avg=1, vbusct=1100, ishct=1100, \
                  meascont=True, measv=True, measi=True, \
-                 alert=None, alertpol=0, alertlatch=0, alertlimit=0):
+                 alert=None, alertpol=0, alertlatch=0, alertlimit=0, Rdiv1=0, Rvbus=380):
         self.i2c_channel = channel
         self.bus = smbus.SMBus(self.i2c_channel)
         self.address = address
@@ -78,6 +105,9 @@ class INA260Controller:
         self.__alertpol = alertpol
         self.__alertlatch = alertlatch
         self.__alertlimit = alertlimit
+        self.__rdiv1 = Rdiv1
+        self.__rvbus = Rvbus
+        self.__fvdiv = Rvbus / (Rdiv1 + Rvbus) # Voltage divider factor Vbus/Vmeas
 
     @property
     def avg(self):
@@ -244,14 +274,14 @@ current or power has been specified"
         #element from alertlist which is not zero
         alertunit = next(val for val in alertlist if val != 0)
         print("Alertunit:", alertunit)
-        if alertunit > 3: # Current Unit 1.25mA/bit
+        if alertunit > 3: # Current Unit 1.25mA/bit. Same current through voltage divider
             alertint = round(alertlimit / A_per_Bit)
             alertlimit = alertint * A_per_Bit
-        elif alertunit > 1: # Voltage Unit 1.25mV/bit
-            alertint = round(alertlimit / V_per_Bit)
+        elif alertunit > 1: # Voltage Unit 1.25mV/bit. Voltage divider factor applied
+            alertint = round(alertlimit * self.__fvdiv / V_per_Bit)
             alertlimit = alertint * V_per_Bit
-        else: #Energy Unit 10mW/bit
-            alertint = round(alertlimit / W_per_Bit)
+        else: #Energy Unit 10mW/bit. Voltage divider factor for bus voltage applied
+            alertint = round(alertlimit * self.__fvdiv / W_per_Bit)
             alertlimit = alertint * W_per_Bit
         assert (0 <= alertint <= 0xFFFF), "alertlimit has to be a 16-bit Integer"
         self._write(REG_ALERT, alertint)
@@ -407,7 +437,7 @@ current or power has been specified"
 
         """
         voltage = self._read(REG_BUS_VOLTAGE)
-        voltage *= V_per_Bit # 1.25mv/bit
+        voltage *= V_per_Bit / self.__fvdiv # 1.25mv/bit. Correction for voltage divider
 
         return voltage
 
@@ -435,7 +465,7 @@ current or power has been specified"
         """
 
         power = self._read(REG_POWER)
-        power *= W_per_Bit # 10mW/bit
+        power *= W_per_Bit / self.__fvdiv # 10mW/bit. Correction for voltage divider
 
         return power
 

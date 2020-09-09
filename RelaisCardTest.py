@@ -7,17 +7,27 @@ Demo how to access Relais cards through MCP23017 port expander
 import time
 import RPi.GPIO as GPIO
 import smbus
-from MCP23017 import MCP23017, PortManager, IOCON
+from MCP23017 import MCP23017
 
-#create chip with bank=1 mode on address 0x20
-mcp23017 = MCP23017(0x20, 1)
-
-exit()
 GPIO.setmode(GPIO.BCM)
 #Enable MCP23017 by setting reset pin (connected to BCM4) to high
 RESET_PIN = 4
 GPIO.setup(RESET_PIN, GPIO.OUT)
 GPIO.output(RESET_PIN, GPIO.HIGH)
+
+#create chip with bank=1 mode on address 0x20
+mcp23017 = MCP23017()
+#configure all pins of both ports as outputs
+for pin in mcp23017.pins.values():
+    pin.disable()
+
+print("Direction of Mains pin:",mcp23017.pins["Mains"].dirreg)
+#mypin=pin(mcp23017,"gpiob",0)
+#mypin.enable()
+#time.sleep(1)
+#mypin.disable()
+
+exit()
 
 #Initialize I2C Bus #1 for MCP23017 with address 0x20
 address = 0x20
