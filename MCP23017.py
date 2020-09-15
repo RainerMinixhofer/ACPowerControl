@@ -7,7 +7,9 @@ A description of the usage can be found under http://www.gsurf.de/mcp23017-i2c-m
 Code has been rewritten by Rainer Minixhofer using properties
 """
 
+import time
 import smbus #pylint: disable=E0401
+import RPi.GPIO as GPIO #pylint: disable=E0401
 
 mcp23017registers = ["iodir", "ipol", "gpinten", "defval", "intcon", "iocon",\
                      "gppu", "intf", "intcap", "gpio", "olat"]
@@ -28,25 +30,51 @@ class MCP23017:
     pins and gpiopins properties. They are dictionaries which use the pinname
     specified in the pinconfig dictionary and the gpioa/gpiob standard pinname
     respectively.
+    The resetpin parameter specifies the BCM port of the Raspberry Pi connected to
+    the reset pin of the MCP23017.
     """
 
-    def __init__(self, i2cbus=1, device=0x20, bank=0, pinconfig=defaultpinconfig): #pylint: disable=W0102
+    def __init__(self, i2cbus=1, device=0x20, bank=0, pinconfig=defaultpinconfig, resetpin = None): #pylint: disable=W0102,R0913
         self.device = device
         self.bus = smbus.SMBus(i2cbus)
         if bank == 0:
-            self.gpioa = {reg : 2*i for i,reg in enumerate(mcp23017registers)}
-            self.gpiob = {reg : 2*i+1 for i,reg in enumerate(mcp23017registers)}
+            self.gpioa = {reg : 2*i for i, reg in enumerate(mcp23017registers)}
+            self.gpiob = {reg : 2*i+1 for i, reg in enumerate(mcp23017registers)}
         else:
-            self.gpioa = {reg : i for i,reg in enumerate(mcp23017registers)}
-            self.gpiob = {reg : i + 0x10 for i,reg in enumerate(mcp23017registers)}
+            self.gpioa = {reg : i for i, reg in enumerate(mcp23017registers)}
+            self.gpiob = {reg : i + 0x10 for i, reg in enumerate(mcp23017registers)}
+        #Make reverse lookup dictionary where one can search the register name by
+        #looking up it's address
+        self.gpioregs = {reg+"a" : addr for reg, addr in self.gpioa.items()}
+        self.gpioregs.update({reg+"b" : addr for reg, addr in self.gpiob.items()})
+        self.gpioregs = {v: k for k, v in self.gpioregs.items()}
         #Generate a reverse lookup dictionary to look up a pin name specification with
         #the standardized port name and bit number (e.g. C2M -> gpiob4)
-        self.gpiopins = {value: key for key,value in pinconfig.items()}
+        self.gpiopins = {value: key for key, value in pinconfig.items()}
+        #Define class properties from register list
+#        for reg in mcp23017registers:
+#            setattr(self, reg+"a", self.getregister(reg+"a"))
+#            setattr(self, reg+"b", self.getregister(reg+"b"))
+        #Initialize port extender by pulling resetpin to low if resetpin is not None
+        #According to MCP23017 datasheet the minimul reset puls duration must be 1us
+        if resetpin is not None:
+            GPIO.setmode(GPIO.BCM)
+            #Enable MCP23017 by setting reset pin (connected to BCM4) to high
+            GPIO.setup(resetpin, GPIO.OUT)
+            GPIO.output(resetpin, GPIO.HIGH)
+            #Reset MCP23017 by pulling it for 100us to low.
+            #This short timing is very incorrect, but sufficiently longer than 1us
+            GPIO.output(resetpin, GPIO.LOW)
+            time.sleep(0.1/1000)
+            GPIO.output(resetpin, GPIO.HIGH)
         #Set all pins to tri-state by default
-        self.setregister(self.registeraddr("iodira"), 0xFF)
-        self.setregister(self.registeraddr("iodirb"), 0xFF)
-        self.setregister(self.registeraddr("gppua"), 0x00)
-        self.setregister(self.registeraddr("gppub"), 0x00)
+        self.setregister("iodira", 0xFF)
+        self.setregister("iodirb", 0xFF)
+        self.setregister("gppua", 0x00)
+        self.setregister("gppub", 0x00)
+
+    def __del__(self):
+        GPIO.cleanup()
 
     def registeraddr(self, register="iodira"):
         """
@@ -59,17 +87,27 @@ class MCP23017:
 
     def getregister(self, register="iodira", bit=None, pin=None):
         """
-        Reads content of register named <register>. If bit is not None
-        just the value of bit number <bit> ist returned.
+        Reads content of register named <register> (if register is a string).
+        If <register> is an integer it is interpreted as the register address.
+        If bit is not None just the value of bit number <bit> ist returned.
         If pin is not None, <register> and <bit> are derived from the pin
         specification. If pin is specified register needs to be specified
         without port spec (without "a" or "b" at the end)
         """
-        if pin is not None:
-            port, bit = self.name2portbit(pin)
-            register = register + port
+        #save address of register in local variable if register is specified as string
+        #and vice versa if it is specified as int (thus interpreted as address)
+        if isinstance(register, str):
+            if pin is not None:
+                port, bit = self.name2portbit(pin)
+                register = register + port
+            registeraddr = self.registeraddr(register)
+        elif isinstance(register, int):
+            registeraddr = register
+            register = self.gpioregs[registeraddr]
+        else:
+            raise TypeError("Register must be string(register name) or integer(register address)")
         try:
-            value = self.bus.read_byte_data(self.device, self.registeraddr(register))
+            value = self.bus.read_byte_data(self.device, registeraddr)
         except OSError:
             print("Error reading bus")
             return None
@@ -77,11 +115,22 @@ class MCP23017:
             return (value & 2**bit) >> bit
         return value
 
-    def setregister(self, registeraddr, value=0xFF):
+    def setregister(self, register="iodira", value=0xFF):
         """
-        Sets content of register with address <registeraddr> to value.
+        Sets content of register with name <register> (if register is a string)
+        and with address <register> (if register is an integer) to value.
         """
-        assert (0 <= value <= 0xFF), "Register is 8-bit value. Needs to be in range 0x00..0xFF"
+        assert (0 <= value <= 0xFF), \
+            "Register holds an 8-bit value. Needs to be in range 0x00..0xFF"
+        #save address of register in local variable if register is specified as string
+        #and vice versa if it is specified as int (thus interpreted as address)
+        if isinstance(register, str):
+            registeraddr = self.registeraddr(register)
+        elif isinstance(register, int):
+            registeraddr = register
+            register = self.gpioregs[registeraddr]
+        else:
+            raise TypeError("Register must be string(register name) or integer(register address)")
         try:
             self.bus.write_byte_data(self.device, registeraddr, value)
         except OSError:
@@ -97,10 +146,11 @@ class MCP23017:
             newvalue = value_old | (1<<bit)
         except OSError:
             print("Unable to read bus")
-        try:
-            self.bus.write_byte_data(self.device, registeraddr, newvalue)
-        except OSError:
-            print("Unable to write bus")
+        if newvalue != value_old:
+            try:
+                self.bus.write_byte_data(self.device, registeraddr, newvalue)
+            except OSError:
+                print("Unable to write bus")
 
     def disable_bit(self, registeraddr, bit=0):
         """
@@ -112,10 +162,11 @@ class MCP23017:
             newvalue = value_old & ~(1<<bit)
         except OSError:
             print("Unable to read bus")
-        try:
-            self.bus.write_byte_data(self.device, registeraddr, newvalue)
-        except OSError:
-            print("Unable to read bus")
+        if newvalue != value_old:
+            try:
+                self.bus.write_byte_data(self.device, registeraddr, newvalue)
+            except OSError:
+                print("Unable to read bus")
 
     def name2portbit(self, pin):
         """
@@ -129,7 +180,7 @@ class MCP23017:
 
         return port, bit
 
-    def enable(self, port="a", bit=0, pin=None):
+    def enable(self, pin=None, port="a", bit=0):
         """
         enables bit <bit> of gpio port <port> (setting it to output first).
         If <pin> is specified (not None) the <port> and <bit> settings are
@@ -140,7 +191,7 @@ class MCP23017:
         self.disable_bit(self.registeraddr("iodir"+port), bit)
         self.enable_bit(self.registeraddr("gpio"+port), bit)
 
-    def disable(self, port="a", bit=0, pin=None):
+    def disable(self, pin=None, port="a", bit=0):
         """
         Disables bit <bit> of gpio port <port> (setting it to output first)
         If <pin> is specified (not None) the <port> and <bit> settings are
@@ -151,7 +202,7 @@ class MCP23017:
         self.disable_bit(self.registeraddr("iodir"+port), bit)
         self.disable_bit(self.registeraddr("gpio"+port), bit)
 
-    def setinput(self, port="a", bit=0, pin=None):
+    def setinput(self, pin=None, port="a", bit=0):
         """
         Set bit <bit> of gpio port <port> to input
         If <pin> is specified (not None) the <port> and <bit> settings are
@@ -162,7 +213,7 @@ class MCP23017:
         self.enable_bit(self.registeraddr("iodir"+port), bit)
         self.enable_bit(self.registeraddr("gppu"+port), bit)
 
-    def setx(self, port="a", bit=0, pin=None):
+    def setx(self, pin=None, port="a", bit=0):
         """
         Tri state mode, input and pullup resistor off
         If <pin> is specified (not None) the <port> and <bit> settings are
@@ -173,7 +224,7 @@ class MCP23017:
         self.enable_bit(self.registeraddr("iodir"+port), bit)
         self.disable_bit(self.registeraddr("gppu"+port), bit)
 
-    def value(self, port="a", bit=0, pin=None):
+    def value(self, pin=None, port="a", bit=0):
         """
         Reads port binary status
         If <pin> is specified (not None) the <port> and <bit> settings are

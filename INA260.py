@@ -95,16 +95,16 @@ class INA260Controller:
         self.i2c_channel = channel
         self.bus = smbus.SMBus(self.i2c_channel)
         self.address = address
-        self.__avg = avg
-        self.__vbusct = vbusct
-        self.__ishct = ishct
-        self.__meascont = meascont
-        self.__measv = measv
-        self.__measi = measi
-        self.__alert = alert
-        self.__alertpol = alertpol
-        self.__alertlatch = alertlatch
-        self.__alertlimit = alertlimit
+        self.avg = avg
+        self.vbusct = vbusct
+        self.ishct = ishct
+        self.meascont = meascont
+        self.measv = measv
+        self.measi = measi
+        self.alert = alert
+        self.alertpol = alertpol
+        self.alertlatch = alertlatch
+        self.alertlimit = alertlimit
         self.__rdiv1 = Rdiv1
         self.__rvbus = Rvbus
         self.__fvdiv = Rvbus / (Rdiv1 + Rvbus) # Voltage divider factor Vbus/Vmeas
@@ -202,11 +202,11 @@ class INA260Controller:
         return self.__alert
     @alert.setter
     def alert(self, alert):
-        assert True if alert is None or alert == '' else all(i in ALERT for i in alert), \
+        assert True if alert in [None, ''] else all(i in ALERT for i in alert), \
             "alert contains not only elements from allowed list of values: {}".format(ALERT)
         mereg = self._read(REG_MASK_ENABLE)
         alerts = 0
-        if alert is not None and alert != '':
+        if alert not in [None, '']:
             alertlist = list(ALERT.index(i) for i in alert)
             #If multiple functions are enabled, the highest significant bit position \
             #Alert Function (D15-D11) takes priority and responds to the Alert Limit Register
@@ -266,26 +266,27 @@ class INA260Controller:
         return self.__alertlimit
     @alertlimit.setter
     def alertlimit(self, alertlimit):
-        alertlist = list(ALERT.index(i) for i in self.__alert)
-        assert any(a > 0 for a in alertlist), \
-            "Alertlimit can just be set if one of the alertflags for voltage, \
-current or power has been specified"
-        #Convert interpret alertlimit units based on alert setting. Take  first
-        #element from alertlist which is not zero
-        alertunit = next(val for val in alertlist if val != 0)
-        print("Alertunit:", alertunit)
-        if alertunit > 3: # Current Unit 1.25mA/bit. Same current through voltage divider
-            alertint = round(alertlimit / A_per_Bit)
-            alertlimit = alertint * A_per_Bit
-        elif alertunit > 1: # Voltage Unit 1.25mV/bit. Voltage divider factor applied
-            alertint = round(alertlimit * self.__fvdiv / V_per_Bit)
-            alertlimit = alertint * V_per_Bit
-        else: #Energy Unit 10mW/bit. Voltage divider factor for bus voltage applied
-            alertint = round(alertlimit * self.__fvdiv / W_per_Bit)
-            alertlimit = alertint * W_per_Bit
-        assert (0 <= alertint <= 0xFFFF), "alertlimit has to be a 16-bit Integer"
-        self._write(REG_ALERT, alertint)
-        self.__alertlimit = alertlimit
+        if self.__alert not in [None, '']:
+            alertlist = list(ALERT.index(i) for i in self.__alert)
+            assert any(a > 0 for a in alertlist), \
+                "Alertlimit can just be set if one of the alertflags for voltage, \
+                    current or power has been specified"
+            #Convert interpret alertlimit units based on alert setting. Take  first
+            #element from alertlist which is not zero
+            alertunit = next(val for val in alertlist if val != 0)
+            print("Alertunit:", alertunit)
+            if alertunit > 3: # Current Unit 1.25mA/bit. Same current through voltage divider
+                alertint = round(alertlimit / A_per_Bit)
+                alertlimit = alertint * A_per_Bit
+            elif alertunit > 1: # Voltage Unit 1.25mV/bit. Voltage divider factor applied
+                alertint = round(alertlimit * self.__fvdiv / V_per_Bit)
+                alertlimit = alertint * V_per_Bit
+            else: #Energy Unit 10mW/bit. Voltage divider factor for bus voltage applied
+                alertint = round(alertlimit * self.__fvdiv / W_per_Bit)
+                alertlimit = alertint * W_per_Bit
+            assert (0 <= alertint <= 0xFFFF), "alertlimit has to be a 16-bit Integer"
+            self._write(REG_ALERT, alertint)
+            self.__alertlimit = alertlimit
 
     @property
     def alertflag(self):
@@ -468,6 +469,7 @@ current or power has been specified"
 
         return power
 
+    @property
     def manufacturer_id(self):
         """
         Returns the manufacturer ID - should always be 0x5449
@@ -477,6 +479,7 @@ current or power has been specified"
         return man_id
 
 
+    @property
     def die_id(self):
         """
         Returns the die ID - should be 0x227.
@@ -485,6 +488,7 @@ current or power has been specified"
         die_id = die_id >> 4
         return die_id
 
+    @property
     def die_rev(self):
         """
         Returns the die revision - should be 0x0.
@@ -492,6 +496,24 @@ current or power has been specified"
         die_rev = self._read(REG_DIE_ID)
         die_rev = die_rev & 0x000F
         return die_rev
+
+    @property
+    def Rdiv1(self):
+        """
+        Returns the Series resistor of the external voltage divider specified at
+        Initialization
+        """
+        
+        return self.__rdiv1
+
+    @property
+    def Rvbus(self):
+        """
+        Returns the internal impedance value of the voltage bus pin of the INA260
+        specified at initialization
+        """
+        
+        return self.__rvbus
 
     def reset(self):
         """

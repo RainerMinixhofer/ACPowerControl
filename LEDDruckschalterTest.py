@@ -7,7 +7,7 @@ Test routine for LED Switch
 Switches LED on when Switch is on and off when off
 """
 import time
-import RPi.GPIO as GPIO
+import RPi.GPIO as GPIO #pylint: disable=E0401
 
 delayTime = 0.01
 GPIO.setmode(GPIO.BCM)

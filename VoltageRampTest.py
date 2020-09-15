@@ -7,8 +7,8 @@ Then a shorter ramp from 1,5V up to 15V with the 2A Coil configuration is done
 """
 import time
 import math
-import RPi.GPIO as GPIO
-import smbus
+from MCP23017 import MCP23017
+import INA260 #pylint: disable=E0401
 
 def switchsequence(gpa, gpb, Vac):
     """
@@ -16,9 +16,9 @@ def switchsequence(gpa, gpb, Vac):
     Parameters
     ----------
     gpa : hexadecimal
-        value to write into 0x14 register for relais setting of port gpa.
+        value to write into gpioa register for relais setting of port gpa.
     gpb : hexadecimal
-        value to write into 0x15 register for relais setting of port gpb.
+        value to write into gpiob register for relais setting of port gpb.
     Vac : Integer
         Specifies AC Voltage given by the definition of gpa and gpb ports.
 
@@ -28,65 +28,59 @@ def switchsequence(gpa, gpb, Vac):
 
     """
 
-    #Set relais positions for required voltage (with 220V mains still of)
-    bus.write_byte_data(reladdress, 0x14, gpa)
-    bus.write_byte_data(reladdress, 0x15, gpb)
-    #Wait for 100ms to settle any relais bouncing
-    time.sleep(0.1)
-    #Switch 220V mains on
-    bus.write_byte_data(reladdress, 0x15, gpb+1)
+    #Set relais positions for required voltage and leave mains pin as set
+    #Switch each bit in sequence instead of in parallel to reduce disturbance
+    #of power supply
+    gpb |= 0x01
+    for b in range(8):
+        if (gpa>>b) & 1 == 1:
+            mcp23017.enable(port='a', bit=b)
+            time.sleep(0.1)
+        else:
+            mcp23017.disable(port='a', bit=b)
+            time.sleep(0.1)
+    mcp23017.enable(port='b', bit=0)
+    for b in range(1,8):
+        if (gpb>>b) & 1 == 1:
+            mcp23017.enable(port='b', bit=b)
+            time.sleep(0.1)
+        else:
+            mcp23017.disable(port='b', bit=b)
+            time.sleep(0.1)
     #Readout on voltmeter, wait 1s to get voltage settled and to enable measurement integration
-    time.sleep(1.0)
-    #Read voltage register 0x02 and convert to mV (multiply by 1.25).
-    #Since the output is averaged over 256 samples with 1.1ms sample time we get a total averaging time of 281.6ms which
-    #are 14.08 periods at 50Hz. Thus the averaged Result Uav for this one way rectifier circuit should
-    #be Uav=Ueff/Sqrt(2). Thus the effective AC Voltage is Ueff,i=Uav*Sqrt(2)
-    #The Cicuit has a voltage divider with R1=220kOhm R2=380kOhm, thus the input voltage of the divider is Ueff=Ueff,i*(R1+R2)/R2
-    #and thus multiplied by (R1+R2)/R2
-    voltage = bend2lend(bus.read_word_data(metaddress, 0x02)) * 1.25 * math.sqrt(2) * (220+380)/220
-    print("Voltage for ",Vac,"V",voltage)
-    time.sleep(1.0)
-    #Switch off 220V again
-    bus.write_byte_data(reladdress, 0x15, gpb)
-    #Wait for 1sec to let magnetic power in coil decay over varistor
-    time.sleep(1.0)
-    #Set remaining relais back to off
-    bus.write_byte_data(reladdress, 0x14, 0x00)
-    bus.write_byte_data(reladdress, 0x15, 0x00)
+    time.sleep(2.0)
+    #Since the output is averaged over 256 samples with 1.1ms sample time we get a total averaging
+    #time of 281.6ms which are 14.08 periods at 50Hz. Thus the averaged Result Uav for this
+    #one way rectifier circuit should be Uav=Ueff/Sqrt(2). Thus the effective AC Voltage is
+    #Ueff,i=Uav*Sqrt(2).
+    print("Voltage for ",Vac,"V",ina260.voltage() * math.sqrt(2))
+    #Set connecting relais back to off
+    for b in range(8):
+        mcp23017.disable(port='a', bit=b)
+        time.sleep(0.1)
+    mcp23017.enable(port='b', bit=0)
+    for b in range(1,8):
+        mcp23017.disable(port='b', bit=b)
+        time.sleep(0.1)
     #Wait till next voltage step execution
     time.sleep(2.0)
 
-def bend2lend(value):
-    """
-    Converts integer value <value> from big endian to little endian and vice versa
-    """
-    result = ((value&(255<<8))>>8)|((value&255)<<8)
-    if result > 32767:
-        result -= 1
-        result = -((~result) & 65535)
-    return result
-
-GPIO.setmode(GPIO.BCM)
-#Initialize I2C Bus #1
-bus = smbus.SMBus(1)
-#Enable MCP23017 by setting reset pin (connected to BCM4) to high
-RESET_PIN = 4
-GPIO.setup(RESET_PIN, GPIO.OUT, initial=GPIO.HIGH)
-
-#MCP23017 Port Expander has address 0x20 on I2C Bus #1
-reladdress = 0x20
+#create chip driver with bank=0 mode on address 0x20
+mcp23017 = MCP23017(i2cbus=1, device=0x20, bank=0, resetpin=4)
 #Set all Pins of GPA and GPB of MCP23017 to output
-bus.write_byte_data(reladdress, 0x00, 0x00)
-bus.write_byte_data(reladdress, 0x01, 0x00)
+for bit in range(8):
+    mcp23017.disable(port="a", bit=bit)
+    mcp23017.disable(port="b", bit=bit)
 #Check if the registers have been properly set
-print("Register setting at 0x00:", bus.read_byte_data(reladdress, 0x00))
-print("Register setting at 0x01:", bus.read_byte_data(reladdress, 0x01))
+print("Direction register of port A: 0x{:02X}".format(mcp23017.getregister("iodira")))
+print("Direction register of port B: 0x{:02X}".format(mcp23017.getregister("iodirb")))
 
 #INA260 Power Meter has address 0x20 on I2C Bus #1
-metaddress = 0x40
-#Set Averaging mode for 256 averages at 1.1ms conversion time in continous mode measuring Shunt Current and Bus Voltage
-#We write the binary data b0110101100100111=0x6B27 in big endian form into the configuration register 0x00
-bus.write_word_data(metaddress, 0x00, 0x276B)
+#Set Averaging mode for 256 averages at 1.1ms conversion time in continous mode
+#measuring Shunt Current and Bus Voltage. Voltage divider resistor is 220kOhm
+ina260 = INA260.INA260Controller(avg=256, vbusct=1100, ishct=1100, meascont=True, \
+                                 measi=True, measv=True, Rdiv1=220)
+ina260.reset()
 
 print("Ramping Voltage from 1.5V up to 30V in 1A coil configuration")
 input("Press enter when ready....")
@@ -108,35 +102,38 @@ switchsequence(0x92, 0x06, 10.5)
 #12.0V/1A
 switchsequence(0x20, 0x80, 12.0)
 #13.5V/1A
-#switchsequence(0x61, 0x06, 13.5)
+switchsequence(0x61, 0x06, 13.5)
 #15.0V/1A
-#switchsequence(0x24, 0x00, 15.0)
+switchsequence(0x24, 0x00, 15.0)
 #18.0V/1A
-#switchsequence(0x89, 0x00, 18.0)
+switchsequence(0x89, 0x00, 18.0)
 #21.0V/1A
-#switchsequence(0x92, 0x00, 21.0)
+switchsequence(0x92, 0x00, 21.0)
 #24.0V/1A
-#switchsequence(0x62, 0x00, 24.0)
+switchsequence(0x62, 0x00, 24.0)
 #27.0V/1A
-#switchsequence(0x61, 0x00, 27.0)
+switchsequence(0x61, 0x00, 27.0)
 #30.0V/1A
-#switchsequence(0xA1, 0x00, 30.0)
+switchsequence(0xA1, 0x00, 30.0)
 print("Ramping Voltage from 1.5V up to 15V in 2A coil configuration")
 #1.5V/2A
-#switchsequence(0x09, 0x4E, 1.5)
+switchsequence(0x09, 0x4E, 1.5)
 #3.0V/2A
-#switchsequence(0x09, 0x48, 3.0)
+switchsequence(0x09, 0x48, 3.0)
 #4.5V/2A
-#switchsequence(0x11, 0x56, 4.5)
+switchsequence(0x11, 0x56, 4.5)
 #6.0V/2A
-#switchsequence(0x12, 0x18, 6.0)
+switchsequence(0x12, 0x18, 6.0)
 #7.5V/2A
-#switchsequence(0x21, 0x66, 7.5)
+switchsequence(0x21, 0x66, 7.5)
 #9.0V/2A
-#switchsequence(0x50, 0x51, 9.0)
+switchsequence(0x50, 0x51, 9.0)
 #12.0V/2A
-#switchsequence(0x22, 0x28, 12.0)
+switchsequence(0x22, 0x28, 12.0)
 #15.0V/2A
-#switchsequence(0x21, 0x60, 15.0)
-print("End Test")
+switchsequence(0x21, 0x60, 15.0)
 
+#Switch 220V mains off
+mcp23017.disable("Mains")
+
+print("End Test")

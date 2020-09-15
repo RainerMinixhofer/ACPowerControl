@@ -7,7 +7,7 @@ Encoder with the RasPi
 # coding=utf-8
 # Needed modules will be imported and configured
 import time
-import RPi.GPIO as GPIO
+import RPi.GPIO as GPIO #pylint: disable=E0401
 
 GPIO.setmode(GPIO.BCM)
 
