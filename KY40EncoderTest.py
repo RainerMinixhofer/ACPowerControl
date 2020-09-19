@@ -12,6 +12,7 @@ import RPi.GPIO as GPIO #pylint: disable=E0401
 GPIO.setmode(GPIO.BCM)
 
 # Declaration and initialisation of the input pins which are connected with the sensor.
+# TODO: Implement Code from https://www.best-microcontroller-projects.com/rotary-encoder.html
 PIN_CLK = 21
 PIN_DT = 20
 BUTTON_PIN = 16

@@ -1,4 +1,4 @@
-#pylint: disable=C0103,R0913,R0902,R0904
+#pylint: disable=C0103,R0913,R0902,R0904,R0914
 """
 Driver for accessing INA260 Power Meter Chip from Texas Instruments
 Based on the implementation by Josh Veitch-Michaelis at https://github.com/jveitchmichaelis/ina260
@@ -7,6 +7,7 @@ Added Functionality (Setting averaging parameters and integration time) by Raine
 
 import struct
 import smbus #pylint: disable=E0401
+import RPi.GPIO as GPIO #pylint: disable=E0401
 
 PCA_AUTOINCREMENT_OFF = 0x00
 PCA_AUTOINCREMENT_ALL = 0x80
@@ -63,6 +64,8 @@ class INA260Controller:
 
     address... Specifies I2C address of hardware
     channel... Specifies I2C channel of hardware
+    alertpin.. Specifies pin of Raspi where the INA260 alert pin has been connected
+               to. Pin number is in BCM notation.
     The following settings can be found in the INA260 datasheet
     avg....... Number of samples which get averaged before conversion ready is signaled
     vbusct.... Vbus conversion time in us
@@ -89,12 +92,23 @@ class INA260Controller:
 
     """
 
-    def __init__(self, address=0x40, channel=1, avg=1, vbusct=1100, ishct=1100, \
-                 meascont=True, measv=True, measi=True, \
+    def __init__(self, address=0x40, channel=1, alertpin=None, avg=1, vbusct=1100, ishct=1100, \
+                 meascont=True, measv=True, measi=True, alertcallback=None,\
                  alert=None, alertpol=0, alertlatch=0, alertlimit=0, Rdiv1=0, Rvbus=380):
         self.i2c_channel = channel
         self.bus = smbus.SMBus(self.i2c_channel)
         self.address = address
+        self.__alertpin = alertpin
+        if alertpin is not None:
+            #Configure Raspi-Pin <alertpin> as input and enable internal pull-up
+            #since the INA260 alert pin is an open-drain output
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setwarnings(False)
+            GPIO.setup(self.__alertpin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            self.__gpiocleanupneeded = True
+        else:
+            self.__gpiocleanupneeded = False
+        self.__alertcallback = alertcallback
         self.avg = avg
         self.vbusct = vbusct
         self.ishct = ishct
@@ -242,7 +256,8 @@ class INA260Controller:
         """
         Method alertlatch specifying the alert latch enable bit.
         Configures the latching feature of the ALERT pin and Alert Flag bits.
-        1 = Latch enabled
+        1 = Latch enabled.
+            If this is set, a special handling is done to reset ALERT pin and alert flag
         0 = Transparent
         """
         return self.__alertlatch
@@ -251,8 +266,14 @@ class INA260Controller:
         assert (alertlatch in [0,1]), "alertlatch is not in allowed list of values: {}".\
             format([0,1])
         mereg = self._read(REG_MASK_ENABLE)
-        mereg = self.__setbits(mereg, [LEN], alertlatch)
-        self._write(REG_MASK_ENABLE, mereg)
+        if alertlatch == 0:
+            mereg = self.__setbits(mereg, [LEN], 0)
+            self._write(REG_MASK_ENABLE, mereg)
+        else:
+            mereg = self.__setbits(mereg, [LEN], 0)
+            self._write(REG_MASK_ENABLE, mereg)
+            mereg = self.__setbits(mereg, [LEN], 1)
+            self._write(REG_MASK_ENABLE, mereg)
         self.__alertlatch = alertlatch
 
     @property
@@ -274,7 +295,6 @@ class INA260Controller:
             #Convert interpret alertlimit units based on alert setting. Take  first
             #element from alertlist which is not zero
             alertunit = next(val for val in alertlist if val != 0)
-            print("Alertunit:", alertunit)
             if alertunit > 3: # Current Unit 1.25mA/bit. Same current through voltage divider
                 alertint = round(alertlimit / A_per_Bit)
                 alertlimit = alertint * A_per_Bit
@@ -304,16 +324,69 @@ class INA260Controller:
         return (self._read(REG_MASK_ENABLE) & self.__bitmask(AFF)) >> AFF
 
     @property
+    def alertpinstate(self):
+        """
+        Read only property returns state of alertpin if pin has been specified
+        at initialization. If not then None is returned
+        Since the INA260 Alert is open drain and at the RasPi the pull-up
+        resistor is enabled we invert the reading of the RasPi port
+        """
+        if self.__alertpin is None:
+            return None
+        return not GPIO.input(self.__alertpin)
+
+    @property
+    def alertcallback(self):
+        """
+        Property which holds routine to be triggered when alertpin
+        shows falling flank (triggers alert)
+        """
+        if self.__alertcallback is None:
+            return None
+        return self.__alertcallback
+    @alertcallback.setter
+    def alertcallback(self, alertcallback):
+        """
+        Setter routine of alertcallback
+        """
+        if alertcallback is None:
+            GPIO.remove_event_detect(self.__alertpin)
+        else:
+            assert self.__alertpin is not None, \
+                "Alert pin must be specified for callback assignment."
+            assert callable(alertcallback), \
+                "Callback {} is not callable".format(alertcallback)
+            GPIO.add_event_detect(self.__alertpin, GPIO.FALLING)
+            GPIO.add_event_callback(self.__alertpin, alertcallback)
+        self.__alertcallback = alertcallback
+
+    def wait_for_alert_edge(self, timeout=None):
+        """
+        Blocks execution of your program until an falling edge on the alert pin is detected.
+        If the parameter <timeout> is not None or \'Automatic\' a timeout occurs after
+        <timeout> seconds. If <timeout> is \'Automatic\', the timeout is set as 2 times
+        the total conversion time of current and voltage (if selected) times the number
+        of averages.
+        """
+        assert self.__alertpin is not None, \
+            "Alert pin must be specified for callback assignment."
+        if timeout == 'Automatic':
+            timeout = round(self.avg * (self.vbusct * self.measv + self.ishct * self.measi) / 1000)
+            if timeout < 1:
+                timeout = 1
+        elif timeout is not None:
+            timeout = round(timeout * 1000)
+        return GPIO.wait_for_edge(self.__alertpin, GPIO.FALLING, timeout=timeout) is not None
+
+    @property
     def conversionready(self):
         """
         Conversion Ready flag read only method.
         Although the device can be read at any time, and the data from the last conversion
         is available, the Conversion Ready Flag bit is provided to help coordinate one-shot
         or triggered conversions. The Conversion Ready Flag bit is set after all
-        conversions, averaging, and multiplications are complete. Conversion Ready Flag
-        bit clears under the following conditions:
-          1.) Writing to the Configuration Register (except for Power-Down selection)
-          2.) Reading the Mask/Enable Register
+        conversions, averaging, and multiplications are complete. The conversion Ready Flag
+        bit clears when this property is read.
         """
         return (self._read(REG_MASK_ENABLE) & self.__bitmask(CVRF)) >> CVRF
 
@@ -503,7 +576,7 @@ class INA260Controller:
         Returns the Series resistor of the external voltage divider specified at
         Initialization
         """
-        
+
         return self.__rdiv1
 
     @property
@@ -512,7 +585,7 @@ class INA260Controller:
         Returns the internal impedance value of the voltage bus pin of the INA260
         specified at initialization
         """
-        
+
         return self.__rvbus
 
     def reset(self):
@@ -529,3 +602,5 @@ class INA260Controller:
 
     def __del__(self):
         self.bus.close()
+        if self.__gpiocleanupneeded:
+            GPIO.cleanup()

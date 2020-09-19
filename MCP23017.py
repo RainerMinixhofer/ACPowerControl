@@ -34,7 +34,7 @@ class MCP23017:
     the reset pin of the MCP23017.
     """
 
-    def __init__(self, i2cbus=1, device=0x20, bank=0, pinconfig=defaultpinconfig, resetpin = None): #pylint: disable=W0102,R0913
+    def __init__(self, i2cbus=1, device=0x20, bank=0, pinconfig=defaultpinconfig, resetpin=None): #pylint: disable=W0102,R0913
         self.device = device
         self.bus = smbus.SMBus(i2cbus)
         if bank == 0:
@@ -57,24 +57,30 @@ class MCP23017:
 #            setattr(self, reg+"b", self.getregister(reg+"b"))
         #Initialize port extender by pulling resetpin to low if resetpin is not None
         #According to MCP23017 datasheet the minimul reset puls duration must be 1us
+        self.resetpin = resetpin
         if resetpin is not None:
             GPIO.setmode(GPIO.BCM)
+            GPIO.setwarnings(False)
             #Enable MCP23017 by setting reset pin (connected to BCM4) to high
             GPIO.setup(resetpin, GPIO.OUT)
             GPIO.output(resetpin, GPIO.HIGH)
-            #Reset MCP23017 by pulling it for 100us to low.
-            #This short timing is very incorrect, but sufficiently longer than 1us
-            GPIO.output(resetpin, GPIO.LOW)
-            time.sleep(0.1/1000)
-            GPIO.output(resetpin, GPIO.HIGH)
+            #Reset MCP23017
+            self.reset()
         #Set all pins to tri-state by default
-        self.setregister("iodira", 0xFF)
-        self.setregister("iodirb", 0xFF)
-        self.setregister("gppua", 0x00)
-        self.setregister("gppub", 0x00)
+        self.all_to_input()
 
     def __del__(self):
         GPIO.cleanup()
+
+    def reset(self):
+        """
+        Reset MCP23017 by pulling it for 100us to low.
+        This short timing is very incorrect, but sufficiently longer than 1us
+        """
+        if self.resetpin is not None:
+            GPIO.output(self.resetpin, GPIO.LOW)
+            time.sleep(0.1/1000)
+            GPIO.output(self.resetpin, GPIO.HIGH)
 
     def registeraddr(self, register="iodira"):
         """
@@ -135,6 +141,26 @@ class MCP23017:
             self.bus.write_byte_data(self.device, registeraddr, value)
         except OSError:
             print("Unable to write bus")
+
+    def all_to_input(self, pullup=False):
+        """
+        Set all ports to input. With the default setting of pullup = False
+        the Input is tri-state (no-pullups), and two-state (pullups enabled)
+        otherwise
+        """
+        self.setregister("iodira", 0xFF)
+        self.setregister("iodirb", 0xFF)
+        self.setregister("gppua", 0xFF if pullup else 0x00)
+        self.setregister("gppub", 0xFF if pullup else 0x00)
+
+    def all_to_output(self, state=False):
+        """
+        Set all registers to output and state <state>
+        """
+        self.setregister("iodira", value=0x00)
+        self.setregister("gpioa", value=0xFF if state else 0x00)
+        self.setregister("iodirb", value=0x00)
+        self.setregister("gpioa", value=0xFF if state else 0x00)
 
     def enable_bit(self, registeraddr, bit=0):
         """

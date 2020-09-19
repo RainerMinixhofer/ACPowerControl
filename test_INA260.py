@@ -11,14 +11,15 @@ Created on Sat Aug 29 22:12:34 2020
 
 import time
 import os.path
-from math import isclose, sqrt
-import numpy as np
+from math import isclose, sqrt, floor, log10
+from statistics import mean, stdev
+import numpy as np #pylint: disable=E0401
 import pytest
 import INA260 #pylint: disable=E0401
 from MCP23017 import MCP23017
 
-@pytest.fixture
-def mcp23017():
+@pytest.fixture(name='mcp23017')
+def fixture_mcp23017():
     """
     create chip driver with bank=0 mode on address 0x20, reset it to initialize
     via GPIO pin 4 of Raspi
@@ -30,14 +31,14 @@ def mcp23017():
         portexpander.disable(port="b", bit=bit)
     yield portexpander
     del portexpander
-@pytest.fixture
-def ina260():
+@pytest.fixture(name="ina260")
+def fixture_ina260():
     """
     Initialize I2C Bus #1 for INA260 with address 0x40
     Set Averaging mode for 512 averages at 1.1ms conversion time
     in continous mode measuring Shunt Current and Bus Voltage
     """
-    meter = INA260.INA260Controller(avg=1, vbusct=140, ishct=140, meascont=True, \
+    meter = INA260.INA260Controller(alertpin=13, avg=1, vbusct=140, ishct=140, meascont=True, \
                                      measi=True, measv=True, Rdiv1=220)
     yield meter
     del meter
@@ -72,7 +73,121 @@ def test_ina260_registeraccess(ina260):
     ina260.alert = ['Conversion Ready', 'Power Over Limit', 'Bus Voltage Under Voltage', 'Over Current Limit']
     assert ina260.mask_enablereg == 0x8408
     ina260.alertlimit = 0.002
-    assert isclose(ina260.alertlimit, 0.002, abs_tol=0.00125) # absolute accuracy is 1.25mV/LSB thus we set this limit
+    assert isclose(ina260.alertlimit, 0.002, abs_tol=0.00125) # absolute accuracy is 1.25mV/LSB thus we set this as tolerance
+
+def test_ina260_conversionreadyWithRegister(ina260):
+    """
+    Test conversion ready flag by using long conversion time and high amount of
+    averaging
+    """
+    #Set INA260 to run long measurement with long conversion time (1.1ms) and highest
+    #number of averages (1024) resulting in a measurement time of about 3 seconds
+    ina260.reset()
+    ina260.avg = 1024
+    ina260.measv = True
+    ina260.vbusct = 1100
+    ina260.measi = False
+    ina260.ishct = 1100
+    expectedtime = ina260.avg * ina260.vbusct / 1000000
+    #Trigger one measurement by setting MODE3 bit to zero
+    ina260.meascont = False
+    print("\nWaiting {:4.2f} seconds for conversion: ".format(expectedtime), end='')
+    tstart = time.time()
+    #Wait 2xtimes the expected measurment time to check if conversion ready flag shows up
+    while not ina260.conversionready and (time.time() - tstart) < (2 * expectedtime):
+        time.sleep(0.1)
+    dt = time.time() - tstart
+    assert dt < 2*expectedtime, print("Timeout of conversion ready detection")
+    print("Conversion Ready detected after {:4.2f} secs".format(dt))
+    #Test if only one measurement is done and no further (since trigger is set)
+    #The reading of the conversionready property has cleared it already so
+    #no new trigger within the test time period of 4 seconds should happening
+    print("\nWaiting {:4.2f} seconds if conversion does not take place: ".format(expectedtime), end='')
+    tstart = time.time()
+    while not ina260.conversionready and (time.time() - tstart) < (2 * expectedtime):
+        time.sleep(0.1)
+    dt = time.time() - tstart
+    assert dt >= 2 * expectedtime, print("Additional conversion ready flag detected")
+    print("No conversion ready flag enable detected")
+    #Try same test with double measurement time by switching on current measurement as well
+    expectedtime = ina260.avg * (ina260.vbusct + ina260.vbusct) / 1000000
+    ina260.measi = True # Writes into configuration register and thus triggers a new conversion
+    print("\nWaiting {:4.2f} seconds for conversion: ".format(expectedtime), end='')
+    tstart = time.time()
+    #Wait 2xtimes the expected measurment time to check if conversion ready flag shows up
+    while not ina260.conversionready and (time.time() - tstart) < (2 * expectedtime):
+        time.sleep(0.1)
+    dt = time.time() - tstart
+    assert dt < 2 * expectedtime, print("Timeout of conversion ready detection")
+    print("Conversion Ready detected after {:4.2f} secs".format(dt))
+
+def test_ina260_ConversionreadyWithAlertpin(ina260):
+    """
+    Test conversion ready flag by using long conversion time and high amount of
+    averaging
+    """
+    #Set INA260 to run long measurement with long conversion time (1.1ms) and highest
+    #number of averages (1024) resulting in a measurement time of about 3 seconds
+    ina260.reset()
+    ina260.avg = 1024
+    ina260.measv = True
+    ina260.vbusct = 1100
+    ina260.measi = False
+    ina260.ishct = 1100
+    expectedtime = ina260.avg * ina260.vbusct / 1000000
+    #Trigger one measurement by setting MODE3 bit to zero
+    ina260.meascont = False
+    #Configure ALERT pin to be asserted when the conversion ready flag is asserted.
+    ina260.alert = ['Conversion Ready']
+    ina260.alertlatch = True
+    print("\nWaiting {:4.2f} seconds for conversion: ".format(expectedtime), end='')
+    tstart = time.time()
+    #Wait 2xtimes the expected measurement time to check if ALERT flag shows up
+    assert ina260.wait_for_alert_edge(timeout=2*expectedtime), print("Timeout of conversion ready detection")
+    print("Alert Pin State change detected after {:4.2f} secs".format(time.time() - tstart))
+    #Test edge detect function to detect conversion ready flag using callbacks
+    expectedtime = ina260.avg * ina260.vbusct / 1000000
+    conversiondetected = False
+    def conversionreadydetected(_):
+        nonlocal conversiondetected
+        dt = time.time() - tstart
+        assert dt < 2 * expectedtime, print("Timeout of conversion ready detection")
+        print("Alert Pin State rising edge detected after {:4.2f} secs".format(dt))
+        conversiondetected = True
+    ina260.alertcallback = conversionreadydetected
+    ina260.measi = False
+    ina260.alertlatch = True
+    print("\nWaiting {:4.2f} seconds for conversion: ".format(expectedtime), end='')
+    tstart = time.time()
+    time.sleep(2 * expectedtime)
+    assert conversiondetected, "Timeout of conversion ready detection"
+    ina260.alertcallback = None
+
+def test_ina260_alertflag(ina260):
+    """
+    Test use of alertflag to detect when alertlimit has been exceeded
+    """
+    #Set the bus Voltage over-voltage alertflag of the INA260 to a
+    #very low value to enable triggering it through the measurement noise
+    #with no averaging and shortest measurement time
+    ina260.reset()
+    ina260.avg = 1
+    ina260.vbusct = 140
+    ina260.measv = True
+    ina260.measi = False
+    ina260.ishct = 140
+    #Configure ALERT pin to be asserted when there is a bus voltage over voltage.
+    ina260.alert = ['Bus Voltage Over Voltage']
+    ina260.alertlimit = 0.01
+    #Wait 1 sec maximum if the expected measurement time to check if ALERT flag shows up
+    assert ina260.wait_for_alert_edge(timeout=1), print("Timeout of conversion ready detection")
+    print("Alert Pin State change due to bus overvoltage noise.")
+    ina260.alert = ['Bus Voltage Over Voltage']
+    ina260.alertlimit = 1
+    #Wait 1 sec maximum the expected measurement time to check if ALERT flag shows up
+    assert not ina260.wait_for_alert_edge(timeout=1), print("Not expected overvoltage detected")
+    print("No anomalous bus overvoltage detected.")
+
 
 def test_ina260_measurement(mcp23017, ina260):
     """
@@ -92,13 +207,13 @@ def test_ina260_measurement(mcp23017, ina260):
     ina260.vbusct = 1100
     ina260.measv = True
     ina260.measi = False
+    ina260.alert = ['Conversion Ready']
     #Enable mains
     mcp23017.enable("Mains")
     print("Waiting 1sec to stabilize readings after mains switched on")
     time.sleep(1.0)
     print("Measuring....")
-    while not ina260.conversionready:
-        time.sleep(0.1)
+    assert ina260.wait_for_alert_edge(timeout='Automatic'), print("Timeout of conversion ready detection")
     effvoltage = ina260.voltage() * sqrt(2)
     assert abs(effvoltage - 12.0) < 0.8
     print("Measurement done")
@@ -119,31 +234,39 @@ def test_ina260_sampling(mcp23017, ina260):
     time.sleep(1.0)
     print("Measuring....")
 
-    count = 600
+    ina260.alert = ['Conversion Ready']
+
+    count = n = 300
     samples = []
-    #Screen successive equal measurements, thus we get less net samples 
-    #than specified (about half)
+
+    #Sample <count> measurements
     while count > 0:
-        if len(samples) == 0 or ina260.voltage() != samples[-1]:
-            samples.append(ina260.voltage())
+        ina260.wait_for_alert_edge(timeout='Automatic')
+        samples.append(ina260.voltage())
+
         count -= 1
 
-    skip1stperiod = True
+    effective = []
+    startindex = 0
     for i in range(len(samples)-1):
         pair = samples[i:i+2]
-        if pair[0]<0.1 and pair[1]>0.1:
-            if skip1stperiod:
-                #First period (usually not complete). Save end index
-                #for next period
-                startindex = i+1
-                skip1stperiod = False
-            else:
-                #Calculate average of period between startindex from
-                #previous period and identified new startindex
-                average = np.trapz(samples[startindex:i]) / (i-startindex+1)
-                effective = average
-                startindex = i
-                print("Effective value:", effective)
+        if pair[0] < 0.1 < pair[1]:
+            #Calculate average of period between startindex from
+            #previous period and identified new startindex
+            average = np.trapz(samples[startindex:i]) / (i-startindex+1)
+            effective.append(average * sqrt(2))
+            startindex = i
+            print("Effective value: {:5.3f}V".format(effective[-1]))
+
+    #Calculate mean value over all measured periods but drop the
+    #incomplete first and last period
+    def round_to_1(x, ref=None):
+        if ref is None:
+            ref = x
+        return round(x, -int(floor(log10(abs(ref)))))
+
+    error = sqrt((stdev(effective[1:-1]) ** 2)/n)
+    print("Mean effective value {}\u00B1{}V".format(round_to_1(mean(effective[1:-1]), ref=error), round_to_1(error)))
 
     logfile = open(filename, 'w')
     logfile.writelines(map(lambda x: str(x)+'\n', samples))
