@@ -211,7 +211,7 @@ def test_ina260_measurement(mcp23017, ina260):
     #Enable mains
     mcp23017.enable("Mains")
     print("Waiting 1sec to stabilize readings after mains switched on")
-    time.sleep(1.0)
+    time.sleep(2.0)
     print("Measuring....")
     assert ina260.wait_for_alert_edge(timeout='Automatic'), print("Timeout of conversion ready detection")
     effvoltage = ina260.voltage() * sqrt(2)

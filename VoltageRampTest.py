@@ -6,7 +6,7 @@ Ramps Voltage automatically from 1.5V up to 30V with the 1A Coil configuration
 Then a shorter ramp from 1,5V up to 15V with the 2A Coil configuration is done
 """
 import time
-import math
+from math import sqrt
 from MCP23017 import MCP23017
 import INA260 #pylint: disable=E0401
 
@@ -35,14 +35,18 @@ def switchsequence(portextender, powermeter, gpa, gpb, Vac):
     portextender.enable('Mains')
     #Readout on voltmeter, wait 1s to get voltage settled and to enable measurement integration
     time.sleep(2.0)
-    #Since the output is averaged over 256 samples with 1.1ms sample time we get a total averaging
-    #time of 281.6ms which are 14.08 periods at 50Hz. Thus the averaged Result Uav for this
-    #one way rectifier circuit should be Uav=Ueff/Sqrt(2). Thus the effective AC Voltage is
-    #Ueff,i=Uav*Sqrt(2).
-    # TODO: Enter averaging routine for effective voltage here
-    print("Voltage for ", Vac, "V", powermeter.voltage() * math.sqrt(2))
+    #Since we have a single rectifier in the sensing circuit
+    #The AC effective voltage measured is sqrt(2) times lower than the
+    #effective voltage
+    print("Measuring....")
+    powermeter.alert = ['Conversion Ready']
+    assert powermeter.wait_for_alert_edge(timeout='Automatic'), \
+        print("Timeout of conversion ready detection")
+    effvoltage = powermeter.voltage() * sqrt(2)
+    print("Voltage for ", Vac, "V", effvoltage)
+    #Wait for voltage peak to minimize EMC when switching off mains
+    powermeter.wait_for_voltage_peak()
     #Switch mains off
-    # TODO: Enter wait for voltage peak here
     portextender.disable('Mains')
     time.sleep(0.5)
     portextender.reset()
@@ -61,9 +65,13 @@ assert mcp23017.getregister("iodirb") == 0x00, \
         format(mcp23017.getregister("iodirb"), 0x00)
 
 #INA260 Power Meter has address 0x20 on I2C Bus #1
-#Set Averaging mode for 256 averages at 1.1ms conversion time in continous mode
-#measuring Shunt Current and Bus Voltage. Voltage divider resistor is 220kOhm
-ina260 = INA260.INA260Controller(avg=256, vbusct=1100, meascont=True, \
+#we take a long conversion time of 1.1ms together with the highest
+#number of averaging samples in continous mode, which should yield sufficient accuracy
+#to get a good estimate for the AC effective voltage
+#Measuring only Bus Voltage. Voltage divider resistor is 220kOhm
+#ina260 = INA260.INA260Controller(alertpin=13, avg=1024, vbusct=1100, meascont=True, \
+#                                 measi=False, measv=True, Rdiv1=220, alert = ['Conversion Ready'])
+ina260 = INA260.INA260Controller(alertpin=13, avg=1024, vbusct=1100, ishct=140, meascont=True, \
                                  measi=False, measv=True, Rdiv1=220)
 
 print("Ramping Voltage from 1.5V up to 30V in 1A coil configuration")

@@ -26,7 +26,7 @@ def fixture_mcp23017():
     yield portexpander
 
     del portexpander
-    
+
 @pytest.fixture(name="ina260")
 def fixture_ina260():
     """

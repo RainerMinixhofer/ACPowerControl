@@ -5,6 +5,8 @@ Based on the implementation by Josh Veitch-Michaelis at https://github.com/jveit
 Added Functionality (Setting averaging parameters and integration time) by Rainer Minixhofer
 """
 
+import sys
+import time
 import struct
 import smbus #pylint: disable=E0401
 import RPi.GPIO as GPIO #pylint: disable=E0401
@@ -118,7 +120,9 @@ class INA260Controller:
         self.alert = alert
         self.alertpol = alertpol
         self.alertlatch = alertlatch
-        self.alertlimit = alertlimit
+        #set alertlimit only if voltage, current or power alert is specified
+        if alert in ALERT[1:]:
+            self.alertlimit = alertlimit
         self.__rdiv1 = Rdiv1
         self.__rvbus = Rvbus
         self.__fvdiv = Rvbus / (Rdiv1 + Rvbus) # Voltage divider factor Vbus/Vmeas
@@ -230,7 +234,8 @@ class INA260Controller:
             #Conversion Ready flag can be enabled separately
             if any(a == 0 for a in alertlist):
                 alerts += 1
-                alert.insert(0,ALERT[0])
+                if ALERT[0] not in alert:
+                    alert.insert(0,ALERT[0])
         mereg = self.__setbits(mereg, [CNVR, POL, BUL, BOL, UCL, OCL], alerts)
         self._write(REG_MASK_ENABLE, mereg)
         self.__alert = alert
@@ -371,12 +376,67 @@ class INA260Controller:
         assert self.__alertpin is not None, \
             "Alert pin must be specified for callback assignment."
         if timeout == 'Automatic':
-            timeout = round(self.avg * (self.vbusct * self.measv + self.ishct * self.measi) / 1000)
+            timeout = round(2 * self.avg * (self.vbusct * self.measv + \
+                                            self.ishct * self.measi) / 1000)
             if timeout < 1:
                 timeout = 1
         elif timeout is not None:
             timeout = round(timeout * 1000)
         return GPIO.wait_for_edge(self.__alertpin, GPIO.FALLING, timeout=timeout) is not None
+
+    def wait_for_voltage_peak(self, timeout='Automatic', noisethreshold=1.0):
+        """
+        Routine waits for next voltage peak by checking if successive differences of the last three
+        voltage samples change their sign from positive to negative
+        Furthermore ensure that the readings are larger than <noisethreshold> to prevent
+        trigger through noise
+        """
+        #save setup parameters which get overwritten
+        if self.__alertpin is not None:
+            alertbuffer = self.alert
+            avgbuffer = self.avg
+            self.avg = 1
+            vbusctbuffer = self.vbusct
+            self.vbusct = 140
+            meascontbuffer = self.meascont
+            self.meascont = True
+            measibuffer = self.measi
+            self.measi = False
+            measvbuffer = self.measv
+            self.measv = True
+            #Automatic timeout stops after 5 periods of 50Hz frequency
+            if timeout == 'Automatic':
+                periods = 50
+                freq = 50
+                timeout = periods / freq
+                errormsg = "Timeout of 5 Periods of mains frequency of 50Hz reached."
+            elif timeout is None:
+                timeout = sys.maxsize
+            else:
+                errormsg = "Timeout of {} seconds reached.".format(timeout)
+            #Start measurements by taking three initial samples
+            samples = []
+            tstart = time.time()
+            self.alert = ['Conversion Ready']
+            for _ in range(3):
+                self.wait_for_alert_edge(timeout='Automatic')
+                samples.append(self.voltage())
+            #Loop until maximum found or timeout
+            while not (samples[-1]-samples[-2] < 0 < samples[-2]-samples[-3] and\
+                       all(s>noisethreshold for s in samples[-3:])) and \
+                           (time.time() - tstart) < timeout:
+                self.wait_for_alert_edge(timeout='Automatic')
+                samples.append(self.voltage())
+            assert time.time() - tstart < timeout, errormsg
+            #restore saved setup parameters
+            self.alert = alertbuffer
+            self.avg = avgbuffer
+            self.vbusct = vbusctbuffer
+            self.meascont = meascontbuffer
+            self.measi = measibuffer
+            self.measv = measvbuffer
+            return True
+        return False
 
     @property
     def conversionready(self):
