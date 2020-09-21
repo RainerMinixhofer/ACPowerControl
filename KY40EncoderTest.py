@@ -12,10 +12,11 @@ import RPi.GPIO as GPIO #pylint: disable=E0401
 GPIO.setmode(GPIO.BCM)
 
 # Declaration and initialisation of the input pins which are connected with the sensor.
-# TODO: Implement Code from https://www.best-microcontroller-projects.com/rotary-encoder.html
 PIN_CLK = 21
 PIN_DT = 20
 BUTTON_PIN = 16
+# List to decode 4-bit transition state of encoder into invalid(0), CW(1) and CCW(-1) transition
+ENCODERSTATES = [0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0]
 
 GPIO.setup(PIN_CLK, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.setup(PIN_DT, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -23,36 +24,42 @@ GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 # Needed variables will be initialised
 Counter = 0
-Richtung = True
-PIN_CLK_LETZTER = 0
-PIN_CLK_AKTUELL = 0
+CWDir = True
+# Initial reading of CLK and DT pins
+EncState = GPIO.input(PIN_CLK) << 1 + GPIO.input(PIN_DT)
 delayTime = 0.01
 
-# Initial reading of Pin_CLK
-PIN_CLK_LETZTER = GPIO.input(PIN_CLK)
-
-def ausgabeFunktion(channel):
+def ReadEncoder(_):
     """
     This output function will start at signal detection
+    It uses 4-bit transition state to detect if the current state together
+    with the previous state resemble a valid (CW or CCW) movement or an
+    invalid (bouncing induced) one.
+    ENCODERSTATES describe the respective truth table where the index is
+    the transition state value and the entries are the respective validity
+    infos (0 being invalid -1 being CCW and 1 being CW)
+    see code snippets from
+    https://hifiduino.wordpress.com/2010/10/20/rotaryencoder-hw-sw-no-debounce/
+    and https://hifiduino.wordpress.com/2010/10/20/rotaryencoder-hw-sw-no-debounce/
     """
     global Counter
-    global PIN_CLK_AKTUELL
-    global Richtung
+    global EncState
+    global CWDir
 
-    PIN_CLK_AKTUELL = GPIO.input(channel)
+    #remember previous state
+    EncState <<= 2
+    #Read current CLK and DT pin reading after edge detection and add state
+    EncState |= (GPIO.input(PIN_CLK) << 1 + GPIO.input(PIN_DT)) & 0x03
 
-    if PIN_CLK_AKTUELL != PIN_CLK_LETZTER:
+    result = ENCODERSTATES[ EncState & 0x0F ]
+    if result != 0:
 
-        if GPIO.input(PIN_DT) != PIN_CLK_AKTUELL:
-            Counter += 1
-            Richtung = True
-        else:
-            Richtung = False
-            Counter = Counter - 1
+        Counter += result
+        CWDir = result > 0
 
         print("Rotation detected: ")
 
-        if Richtung:
+        if CWDir:
             print("Rotational direction: Clockwise")
         else:
             print("Rotational direction: Counterclockwise")
@@ -71,10 +78,15 @@ def CounterReset(channel): #pylint: disable=W0613
 
 # To include a debounce, the output function will be initialised from the
 # GPIO Python Module
-GPIO.add_event_detect(PIN_CLK, GPIO.BOTH, callback=ausgabeFunktion, \
-    bouncetime=300)
+# Typical bouncetimes are below 10ms (see debouncing.pdf document)
+# The remaining longer bouncing need to be collected by the software debounce
+# method using 4-bit transition values
+GPIO.add_event_detect(PIN_CLK, GPIO.BOTH, callback=ReadEncoder, \
+    bouncetime=10)
+GPIO.add_event_detect(PIN_DT, GPIO.BOTH, callback=ReadEncoder, \
+    bouncetime=10)
 GPIO.add_event_detect(BUTTON_PIN, GPIO.FALLING, callback=CounterReset, \
-    bouncetime=300)
+    bouncetime=10)
 
 print("Sensor-Test [press ctrl-c to end]")
 
