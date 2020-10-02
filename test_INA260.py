@@ -11,6 +11,7 @@ Created on Sat Aug 29 22:12:34 2020
 
 import time
 import os.path
+import json
 from math import isclose, sqrt, floor, log10
 from statistics import mean, stdev
 import numpy as np #pylint: disable=E0401
@@ -217,6 +218,43 @@ def test_ina260_measurement(mcp23017, ina260):
     effvoltage = ina260.voltage() * sqrt(2)
     assert abs(effvoltage - 12.0) < 0.8
     print("Measurement done")
+
+def test_ina260_configio(ina260):
+    """
+    Test JSON Attribute writing and reading of INA260 Class
+    """
+    def test_attr(ina260attr, jsondict, attr):
+        matches = [key for key in jsondict.keys() if key.endswith(attr)]
+        assert matches != [], 'JSON file does not contain {} attribute'
+        assert jsondict[matches[0]] == ina260attr, \
+            'JSON file contains wrong {} attribute value, is {} and should be {}'.\
+            format(attr, jsondict[matches[0]], ina260attr)
+
+    jsonfile = 'test_ina260.json'
+    ina260.WriteConfig(jsonfile)
+    with open(jsonfile) as f:
+        data = json.load(f)
+    test_attr(ina260.address, data, "address")
+    test_attr(13, data, "alertpin")
+    test_attr(ina260.avg, data, "avg")
+    test_attr(ina260.vbusct, data, "vbusct")
+    test_attr(ina260.ishct, data, "ishct")
+    test_attr(ina260.meascont, data, "meascont")
+    test_attr(ina260.measi, data, "measi")
+    test_attr(ina260.measv, data, "measv")
+    test_attr(220, data, "rdiv1")
+    #Change Rdiv1 value in JSON File
+    matches = [key for key in data.keys() if key.endswith('rdiv1')]
+    assert matches != [], 'JSON file does not contain {} attribute'
+    with open(jsonfile, 'r+') as f:
+        data = json.load(f)
+        data[matches[0]] = 240
+        f.seek(0)
+        json.dump(data, f, indent=4)
+        f.truncate()
+    #Read in modified INA260 JSON configuration file
+    ina260.ReadConfig(jsonfile)
+    assert ina260.Rdiv1 == 240, "Configuration file {} incorrectly read.".format(jsonfile)
 
 def test_ina260_sampling(mcp23017, ina260):
     """

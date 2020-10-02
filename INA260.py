@@ -6,8 +6,10 @@ Added Functionality (Setting averaging parameters and integration time) by Raine
 """
 
 import sys
+import os
 import time
 import struct
+import json
 import smbus #pylint: disable=E0401
 import RPi.GPIO as GPIO #pylint: disable=E0401
 
@@ -91,25 +93,18 @@ class INA260Controller:
                divider.
     Rvbus..... Typical value for the VBUS input impedance as per datasheet for
                calculating the measured voltage when a series resistor is used.
-
+    Vt........ Threshold voltage of rectifier diode to compensate for voltage loss
+               at the very low current levels running through the voltage divider
     """
 
     def __init__(self, address=0x40, channel=1, alertpin=None, avg=1, vbusct=1100, ishct=1100, \
                  meascont=True, measv=True, measi=True, alertcallback=None,\
-                 alert=None, alertpol=0, alertlatch=0, alertlimit=0, Rdiv1=0, Rvbus=380):
+                 alert=None, alertpol=0, alertlatch=0, alertlimit=0, Rdiv1=0, Rvbus=210, Vt=0.0, \
+                 config=None):
         self.i2c_channel = channel
         self.bus = smbus.SMBus(self.i2c_channel)
         self.address = address
         self.__alertpin = alertpin
-        if alertpin is not None:
-            #Configure Raspi-Pin <alertpin> as input and enable internal pull-up
-            #since the INA260 alert pin is an open-drain output
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setwarnings(False)
-            GPIO.setup(self.__alertpin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-            self.__gpiocleanupneeded = True
-        else:
-            self.__gpiocleanupneeded = False
         self.__alertcallback = alertcallback
         self.avg = avg
         self.vbusct = vbusct
@@ -120,12 +115,49 @@ class INA260Controller:
         self.alert = alert
         self.alertpol = alertpol
         self.alertlatch = alertlatch
-        #set alertlimit only if voltage, current or power alert is specified
-        if alert in ALERT[1:]:
-            self.alertlimit = alertlimit
         self.__rdiv1 = Rdiv1
         self.__rvbus = Rvbus
+        self.__vt = Vt
         self.__fvdiv = Rvbus / (Rdiv1 + Rvbus) # Voltage divider factor Vbus/Vmeas
+        if config is not None:
+            if config == 'Automatic':
+                config = 'ina260.json'
+            #Ignore all subsequent settings and read in JSON file with attributes
+            assert os.path.isfile(config), "JSON Configuration {} file not found!".format(config)
+            self.bus.close()
+            self.ReadConfig(jsonfile=config)
+            self.bus = smbus.SMBus(self.i2c_channel)
+        #set alertlimit only if voltage, current or power alert is specified
+        if self.alert in ALERT[1:]:
+            self.alertlimit = alertlimit
+        if self.__alertpin is not None:
+            #Configure Raspi-Pin <alertpin> as input and enable internal pull-up
+            #since the INA260 alert pin is an open-drain output
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setwarnings(False)
+            GPIO.setup(self.__alertpin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            self.__gpiocleanupneeded = True
+        else:
+            self.__gpiocleanupneeded = False
+
+    def WriteConfig(self, jsonfile='ina260.json'):
+        """
+        Writes keys and attributes of the INA260 class into JSON file
+        """
+        attrs = {key : val for key, val in self.__dict__.items()
+                   if key not in ["bus"]}
+        f = open(jsonfile, "w")
+        json.dump(attrs, f, indent=4)
+        f.close()
+
+    def ReadConfig(self, jsonfile='ina260.json'):
+        """
+        Reads keys and attributes of the INA260 class from JSON file
+        """
+        with open(jsonfile) as f:
+            attrs = json.load(f)
+        for key, val in attrs.items():
+            self.__dict__[key] = val
 
     @property
     def avg(self):
@@ -235,7 +267,7 @@ class INA260Controller:
             if any(a == 0 for a in alertlist):
                 alerts += 1
                 if ALERT[0] not in alert:
-                    alert.insert(0,ALERT[0])
+                    alert.insert(0, ALERT[0])
         mereg = self.__setbits(mereg, [CNVR, POL, BUL, BOL, UCL, OCL], alerts)
         self._write(REG_MASK_ENABLE, mereg)
         self.__alert = alert
@@ -250,7 +282,7 @@ class INA260Controller:
         return self.__alertpol
     @alertpol.setter
     def alertpol(self, alertpol):
-        assert (alertpol in [0,1]), "alertpol is not in allowed list of values: {}".format([0,1])
+        assert (alertpol in [0, 1]), "alertpol is not in allowed list of values: {}".format([0, 1])
         mereg = self._read(REG_MASK_ENABLE)
         mereg = self.__setbits(mereg, [APOL], alertpol)
         self._write(REG_MASK_ENABLE, mereg)
@@ -268,8 +300,8 @@ class INA260Controller:
         return self.__alertlatch
     @alertlatch.setter
     def alertlatch(self, alertlatch):
-        assert (alertlatch in [0,1]), "alertlatch is not in allowed list of values: {}".\
-            format([0,1])
+        assert (alertlatch in [0, 1]), "alertlatch is not in allowed list of values: {}".\
+            format([0, 1])
         mereg = self._read(REG_MASK_ENABLE)
         if alertlatch == 0:
             mereg = self.__setbits(mereg, [LEN], 0)
@@ -304,7 +336,7 @@ class INA260Controller:
                 alertint = round(alertlimit / A_per_Bit)
                 alertlimit = alertint * A_per_Bit
             elif alertunit > 1: # Voltage Unit 1.25mV/bit. Voltage divider factor applied
-                alertint = round(alertlimit * self.__fvdiv / V_per_Bit)
+                alertint = round((alertlimit - self.__vt) * self.__fvdiv / V_per_Bit)
                 alertlimit = alertint * V_per_Bit
             else: #Energy Unit 10mW/bit. Voltage divider factor for bus voltage applied
                 alertint = round(alertlimit * self.__fvdiv / W_per_Bit)
@@ -423,7 +455,7 @@ class INA260Controller:
                 samples.append(self.voltage())
             #Loop until maximum found or timeout
             while not (samples[-1]-samples[-2] < 0 < samples[-2]-samples[-3] and\
-                       all(s>noisethreshold for s in samples[-3:])) and \
+                       all(s > noisethreshold for s in samples[-3:])) and \
                            (time.time() - tstart) < timeout:
                 self.wait_for_alert_edge(timeout='Automatic')
                 samples.append(self.voltage())
@@ -534,7 +566,7 @@ class INA260Controller:
         #Convert value to little endian
         value = value & 0xFFFF
         #Exchange high-byte with low-byte
-        value = struct.unpack('<H',struct.pack('>H', value))[0]
+        value = struct.unpack('<H', struct.pack('>H', value))[0]
 
         self.bus.write_word_data(self.address, reg, value)
 
@@ -571,6 +603,7 @@ class INA260Controller:
         """
         voltage = self._read(REG_BUS_VOLTAGE)
         voltage *= V_per_Bit / self.__fvdiv # 1.25mv/bit. Correction for voltage divider
+        voltage += self.__vt # Correction for rectifier voltage drop
 
         return voltage
 
@@ -647,6 +680,25 @@ class INA260Controller:
         """
 
         return self.__rvbus
+
+    @Rvbus.setter
+    def Rvbus(self, Rvbus):
+        self.__fvdiv = Rvbus / (self.__rdiv1 + Rvbus) # Voltage divider factor Vbus/Vmeas
+        self.__rvbus = Rvbus
+
+    @property
+    def Vt(self):
+        """
+        Returns the threshold voltage of the rectifier diode connected to
+        the voltage divider of the voltage bus pin of the INA260
+        specified at initialization
+        """
+
+        return self.__vt
+
+    @Vt.setter
+    def Vt(self, Vt):
+        self.__vt = Vt
 
     def reset(self):
         """

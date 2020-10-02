@@ -56,8 +56,8 @@ def test_OLEDDisplay_Text(OLEDDisplay):
     draw = ImageDraw.Draw(image)
     font = ImageFont.truetype('cambriab.ttf', 24)
 
-    draw.text((0, 12), 'WaveShare', fill="BLUE", font=font)
-    draw.text((0, 36), 'Electronic', fill="BLUE", font=font)
+    draw.text((0, 12), 'ACPower', fill="BLUE", font=font)
+    draw.text((0, 36), 'RasPi', fill="BLUE", font=font)
     draw.text((20, 72), '1.5 inch', fill="CYAN", font=font)
     draw.text((10, 96), 'R', fill="RED", font=font)
     draw.text((25, 96), 'G', fill="GREEN", font=font)
