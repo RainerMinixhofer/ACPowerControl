@@ -118,8 +118,10 @@ if os.path.isfile('ina260.json'):
     print("Reading Configuration file ina260.json")
     ina260 = INA260.INA260Controller(config='Automatic')
 else:
-    ina260 = INA260.INA260Controller(alertpin=13, avg=1024, vbusct=1100, ishct=140, meascont=True, \
-                                     measi=False, measv=True, Rdiv1=220, Rvbus=211.8, Vt=0.1582257)
+    ina260 = INA260.INA260Controller(alertpin=13, avg=1024, vbusct=1100, ishct=140, \
+                                     meascont=True, measi=False, measv=True, Rdiv1=220, \
+                                     Rvbus=211.8, Vt=0.1582257, \
+                                     config='Automatic', writeconfig=True)
 
 print("Ramping Voltage from 1.5V up to 30V in 1A coil configuration")
 input("Press enter when ready....")

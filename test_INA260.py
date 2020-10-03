@@ -224,17 +224,20 @@ def test_ina260_configio(ina260):
     Test JSON Attribute writing and reading of INA260 Class
     """
     def test_attr(ina260attr, jsondict, attr):
-        matches = [key for key in jsondict.keys() if key.endswith(attr)]
+        matches = [key for key in jsondict.keys() if key == attr]
         assert matches != [], 'JSON file does not contain {} attribute'
         assert jsondict[matches[0]] == ina260attr, \
             'JSON file contains wrong {} attribute value, is {} and should be {}'.\
             format(attr, jsondict[matches[0]], ina260attr)
 
     jsonfile = 'test_ina260.json'
-    ina260.WriteConfig(jsonfile)
+    del ina260
+    ina260 = INA260.INA260Controller(alertpin=13, avg=1, vbusct=140, ishct=140, meascont=True, \
+                                     measi=True, measv=True, Rdiv1=220, config=jsonfile, writeconfig=True)
     with open(jsonfile) as f:
         data = json.load(f)
-    test_attr(ina260.address, data, "address")
+    test_attr(0x40, data, "address")
+    test_attr(1, data, "channel")
     test_attr(13, data, "alertpin")
     test_attr(ina260.avg, data, "avg")
     test_attr(ina260.vbusct, data, "vbusct")
@@ -242,19 +245,16 @@ def test_ina260_configio(ina260):
     test_attr(ina260.meascont, data, "meascont")
     test_attr(ina260.measi, data, "measi")
     test_attr(ina260.measv, data, "measv")
-    test_attr(220, data, "rdiv1")
+    test_attr(220, data, "Rdiv1")
+    test_attr(210, data, "Rvbus")
+    test_attr(0.0, data, "Vt")
     #Change Rdiv1 value in JSON File
-    matches = [key for key in data.keys() if key.endswith('rdiv1')]
-    assert matches != [], 'JSON file does not contain {} attribute'
-    with open(jsonfile, 'r+') as f:
-        data = json.load(f)
-        data[matches[0]] = 240
-        f.seek(0)
-        json.dump(data, f, indent=4)
-        f.truncate()
+    ina260.WriteConfig('Rvbus', 240, config=jsonfile)
     #Read in modified INA260 JSON configuration file
-    ina260.ReadConfig(jsonfile)
-    assert ina260.Rdiv1 == 240, "Configuration file {} incorrectly read.".format(jsonfile)
+    del ina260
+    ina260 = INA260.INA260Controller(config=jsonfile)
+    assert ina260.Rvbus == 240, \
+        "Configuration file {} incorrectly read.".format(jsonfile)
 
 def test_ina260_sampling(mcp23017, ina260):
     """

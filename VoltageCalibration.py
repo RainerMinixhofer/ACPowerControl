@@ -181,6 +181,7 @@ ina260.Rvbus = popt[1]
 
 print("Calibrated Parameters: Vt={:7.5f}V, Rvbus={:6.3f}kOhm".format(ina260.Vt, ina260.Rvbus))
 print("Writing default configuration file ina260.json")
-ina260.WriteConfig()
+ina260.WriteConfig('Rvbus', ina260.Rvbus)
+ina260.WriteConfig('Vt', ina260.Vt)
 
 del ina260

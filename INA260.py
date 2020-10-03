@@ -100,11 +100,57 @@ class INA260Controller:
     def __init__(self, address=0x40, channel=1, alertpin=None, avg=1, vbusct=1100, ishct=1100, \
                  meascont=True, measv=True, measi=True, alertcallback=None,\
                  alert=None, alertpol=0, alertlatch=0, alertlimit=0, Rdiv1=0, Rvbus=210, Vt=0.0, \
-                 config=None):
+                 config=None, writeconfig=False):
+        #Save parameters of initialization for later use
+        self.__parameters=locals()
+        del self.__parameters['self']
+        #If configuration file is specified the given parameters are either used
+        #for saving them into a JSON file (writeconfig True), or they are overwritten
+        #by the JSON file contents
+        if config is not None:
+            if config == 'Automatic':
+                config = 'ina260.json'
+            if writeconfig:
+                f = open(config, "w")
+                json.dump(self.__parameters, f, indent=4)
+                f.close()
+            else:
+                assert os.path.isfile(config), "JSON Configuration {} file not found!".\
+                    format(config)
+                with open(config) as f:
+                    attrs = json.load(f)
+                #We have to specify the local parameters explicitly because
+                #exec or local() do not allow changing their parameters
+                address=attrs['address']
+                channel=attrs['channel']
+                alertpin=attrs['alertpin']
+                avg=attrs['avg']
+                vbusct=attrs['vbusct']
+                ishct=attrs['ishct']
+                meascont=attrs['meascont']
+                measv=attrs['measv']
+                measi=attrs['measi']
+                alertcallback=attrs['alertcallback']
+                alert=attrs['alert']
+                alertpol=attrs['alertpol']
+                alertlatch=attrs['alertlatch']
+                alertlimit=attrs['alertlimit']
+                Rdiv1=attrs['Rdiv1']
+                Rvbus=attrs['Rvbus']
+                Vt=attrs['Vt']
         self.i2c_channel = channel
         self.bus = smbus.SMBus(self.i2c_channel)
         self.address = address
         self.__alertpin = alertpin
+        if alertpin is not None:
+            #Configure Raspi-Pin <alertpin> as input and enable internal pull-up
+            #since the INA260 alert pin is an open-drain output
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setwarnings(False)
+            GPIO.setup(self.__alertpin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            self.__gpiocleanupneeded = True
+        else:
+            self.__gpiocleanupneeded = False
         self.__alertcallback = alertcallback
         self.avg = avg
         self.vbusct = vbusct
@@ -115,49 +161,31 @@ class INA260Controller:
         self.alert = alert
         self.alertpol = alertpol
         self.alertlatch = alertlatch
+        #set alertlimit only if voltage, current or power alert is specified
+        if alert in ALERT[1:]:
+            self.alertlimit = alertlimit
         self.__rdiv1 = Rdiv1
         self.__rvbus = Rvbus
         self.__vt = Vt
         self.__fvdiv = Rvbus / (Rdiv1 + Rvbus) # Voltage divider factor Vbus/Vmeas
-        if config is not None:
-            if config == 'Automatic':
-                config = 'ina260.json'
-            #Ignore all subsequent settings and read in JSON file with attributes
-            assert os.path.isfile(config), "JSON Configuration {} file not found!".format(config)
-            self.bus.close()
-            self.ReadConfig(jsonfile=config)
-            self.bus = smbus.SMBus(self.i2c_channel)
-        #set alertlimit only if voltage, current or power alert is specified
-        if self.alert in ALERT[1:]:
-            self.alertlimit = alertlimit
-        if self.__alertpin is not None:
-            #Configure Raspi-Pin <alertpin> as input and enable internal pull-up
-            #since the INA260 alert pin is an open-drain output
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setwarnings(False)
-            GPIO.setup(self.__alertpin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-            self.__gpiocleanupneeded = True
-        else:
-            self.__gpiocleanupneeded = False
 
-    def WriteConfig(self, jsonfile='ina260.json'):
+    def WriteConfig(self, key, val, config='Automatic'):
         """
-        Writes keys and attributes of the INA260 class into JSON file
+        Looks for key <key> in JSON config file <config> and overwrites
+        it's value with <val>
         """
-        attrs = {key : val for key, val in self.__dict__.items()
-                   if key not in ["bus"]}
-        f = open(jsonfile, "w")
-        json.dump(attrs, f, indent=4)
-        f.close()
-
-    def ReadConfig(self, jsonfile='ina260.json'):
-        """
-        Reads keys and attributes of the INA260 class from JSON file
-        """
-        with open(jsonfile) as f:
-            attrs = json.load(f)
-        for key, val in attrs.items():
-            self.__dict__[key] = val
+        if config == 'Automatic':
+            config = 'ina260.json'
+        with open(config) as f:
+            data = json.load(f)
+        matches = [k for k in data.keys() if k == key]
+        assert matches != [], 'JSON file does not contain {} parameter'.format(key)
+        with open(config, 'r+') as f:
+            data = json.load(f)
+            data[matches[0]] = val
+            f.seek(0)
+            json.dump(data, f, indent=4)
+            f.truncate()
 
     @property
     def avg(self):
