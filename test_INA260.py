@@ -255,6 +255,7 @@ def test_ina260_configio(ina260):
     ina260 = INA260.INA260Controller(config=jsonfile)
     assert ina260.Rvbus == 240, \
         "Configuration file {} incorrectly read.".format(jsonfile)
+    os.remove(jsonfile)
 
 def test_ina260_sampling(mcp23017, ina260):
     """

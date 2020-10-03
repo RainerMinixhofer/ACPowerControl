@@ -1,0 +1,21 @@
+{
+    "address": 64,
+    "channel": 1,
+    "alertpin": 13,
+    "avg": 1024,
+    "vbusct": 1100,
+    "ishct": 140,
+    "meascont": true,
+    "measv": true,
+    "measi": false,
+    "alertcallback": null,
+    "alert": null,
+    "alertpol": 0,
+    "alertlatch": 0,
+    "alertlimit": 0,
+    "Rdiv1": 220,
+    "Rvbus": 211.8,
+    "Vt": 0.1582257,
+    "config": "Automatic",
+    "writeconfig": true
+}
