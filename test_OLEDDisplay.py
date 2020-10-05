@@ -67,6 +67,28 @@ def test_OLEDDisplay_Text(OLEDDisplay):
     OLEDDisplay.Display_Image(image)
     time.sleep(2.0)
 
+def test_OLEDDisplay_Menu(OLEDDisplay):
+    """
+    Display Menu Text
+    """
+    image = Image.new("RGB", (OLEDDisplay.w, OLEDDisplay.h), "BLACK")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype('cambriab.ttf', 16)
+
+    menu = ['Menu Line '+str(i) for i in range(5)]
+
+    for sel in list(range(len(menu))) + list(range(len(menu)-1))[::-1]:
+        width, height = font.getsize(menu[sel])
+        draw.rectangle([(OLEDDisplay.w-width,12+sel*height), (OLEDDisplay.w, 12+(sel+1)*height)], fill="WHITE")
+        for idx, line in enumerate(menu):
+            width, height = font.getsize(line)
+            draw.text((OLEDDisplay.w-width,12+idx*height), line, fill="BLUE", font=font, alight="right")
+        OLEDDisplay.Display_Image(image)
+        time.sleep(0.5)
+        draw.rectangle([(OLEDDisplay.w-width,12+sel*height), (OLEDDisplay.w, 12+(sel+1)*height)], fill="BLACK")
+
+    time.sleep(0.5)
+
 def test_OLEDDisplay_Lines(OLEDDisplay):
     """
     Display Test Lines
