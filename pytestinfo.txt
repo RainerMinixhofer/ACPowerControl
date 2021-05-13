@@ -1,0 +1,20 @@
+#I2C tests
+pytest -k i2c -v -s
+#Current Meter INA260 tests
+pytest -k ina260 -v -s
+#Encoder KY40 tests
+pytest -k KY40Encoder -m "interactive" -v -s
+#Non-interactive OLED Display tests
+pytest -k OLEDDisplay -m "not interactive" -v -s
+#interactive OLED Display tests
+pytest -k OLEDDisplay -m "interactive" -v -s
+#Switch Port Expander MCP23017 tests
+pytest -k mcp23017 -v -s
+#LED Switch interactive test
+pytest -k LEDDruckschalter -v -s
+#Supply Disturbance Test
+pytest -k supplyDisturbanceMains -v -s
+#Voltage Ramp Test with 1A Coil configuration
+pytest -k VoltageRamp_1A -v -s
+#Voltage Ramp Test with 2A Coil configuration
+pytest -k VoltageRamp_2A -v -s
