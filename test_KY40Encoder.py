@@ -84,7 +84,7 @@ def test_KY40Encoder_rotation_sync(InputDevices,suspend_capturing):
         print("\n")
 
 @pytest.mark.interactive
-def test_KY40Encoder_rotation_async(InputDevices,suspend_capturing):
+def test_KY40Encoder_rotation_async(suspend_capturing):
     """
     Test for rotation using asyncio. Asks user to rotate 10 times right and
     then 10 times left. Checks if the right number of events is captured
