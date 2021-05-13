@@ -9,8 +9,6 @@ Encoder with the RasPi using an input device driver
 # Needed modules will be imported and configured
 from __future__ import print_function
 
-from datetime import datetime
-#import select
 import selectors
 import asyncio
 import evdev #pylint: disable=E0401
@@ -93,6 +91,7 @@ def test_KY40Encoder_rotation_async(InputDevices,suspend_capturing):
     """
     value = 0
     loop = asyncio.get_event_loop()
+    devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
 
     async def handle_events(device):
         nonlocal value
@@ -110,13 +109,12 @@ def test_KY40Encoder_rotation_async(InputDevices,suspend_capturing):
                 if event.keycode == "KEY_ENTER" and event.keystate == event.key_up:
                     loop.stop()
 
+    for device in devices:
+        asyncio.ensure_future(handle_events(device))
+
     with suspend_capturing:
         print("Please rotate encoder " + text_bold + "10" + text_unbold + \
               " times clockwise and then " + text_bold + "10" + text_unbold + \
               " times counterclockwise.\n")
         print("Position Value: {:02d}\n".format(value))
-        for key, _ in InputDevices.select():
-            device = key.fileobj
-            asyncio.ensure_future(handle_events(device))
-
         loop.run_forever()

@@ -10,6 +10,8 @@ Created on Sat Aug 29 22:12:34 2020
 """
 
 import time
+import asyncio
+import evdev #pylint: disable=E0401
 #--------------Image Library---------------#
 from PIL  import Image  #pylint: disable=E0401
 from PIL import ImageDraw  #pylint: disable=E0401
@@ -28,6 +30,37 @@ def fixture_OLEDDisplay():
     oled = OLED.OLEDDriver()
     yield oled
     del oled
+
+@pytest.fixture(name='InputDevices')
+def fixture_InputDevices():
+    """
+    initializes interface to input devices through evdev driver interface
+    """
+
+    devices = [evdev.InputDevice(fn) for fn in evdev.list_devices()]
+    #Filter the rotary encoder and the button device from the devices list
+    devices = [dev for dev in devices if dev.name.split('@')[0] in ['button','rotary']]
+
+    yield devices
+    del devices
+
+@pytest.fixture(name='suspend_capturing')
+def fixture_suspend_capturing(pytestconfig):
+    """
+    fixture for suspending capturing to wait for hardware changes
+    """
+    class suspend_guard:
+        """
+        Subclass for suspending
+        """
+        def __init__(self):
+            self.capmanager = pytestconfig.pluginmanager.getplugin('capturemanager')
+        def __enter__(self):
+            self.capmanager.suspend_global_capture(in_=True)
+        def __exit__(self, _1, _2, _3):
+            self.capmanager.resume_global_capture()
+
+    yield suspend_guard()
 
 def test_OLEDDisplay_Pattern(OLEDDisplay):
     """
@@ -82,12 +115,69 @@ def test_OLEDDisplay_Menu(OLEDDisplay):
         draw.rectangle([(OLEDDisplay.w-width,12+sel*height), (OLEDDisplay.w, 12+(sel+1)*height)], fill="WHITE")
         for idx, line in enumerate(menu):
             width, height = font.getsize(line)
-            draw.text((OLEDDisplay.w-width,12+idx*height), line, fill="BLUE", font=font, alight="right")
+            draw.text((OLEDDisplay.w-width,12+idx*height), line, fill="BLUE", font=font)
         OLEDDisplay.Display_Image(image)
         time.sleep(0.5)
         draw.rectangle([(OLEDDisplay.w-width,12+sel*height), (OLEDDisplay.w, 12+(sel+1)*height)], fill="BLACK")
 
     time.sleep(0.5)
+
+@pytest.mark.interactive
+def test_OLEDDisplay_Settings(OLEDDisplay, InputDevices, suspend_capturing):
+    """
+    Test Interaction between Display and KY40 Rotary Encoder unsing async encoder readout
+    """
+    image = Image.new("RGB", (OLEDDisplay.w, OLEDDisplay.h), "BLACK")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype('cambriab.ttf', 30)
+
+    def plot_voltage(voltage, color="BLUE"):
+        nonlocal font
+        nonlocal draw
+        nonlocal image
+
+        vstring = str(voltage)+'V/1A'
+        width, height = font.getsize(vstring)
+        x0 = (OLEDDisplay.w-width)//2
+        y0 = (OLEDDisplay.h-height)//2
+        draw.rectangle([(0, y0),(OLEDDisplay.w, y0 + height)], fill="BLACK")
+        draw.text((x0, y0), vstring, fill=color, font=font)
+        OLEDDisplay.Display_Image(image)
+
+    vvalue = 0.5
+    plot_voltage(vvalue)
+
+    loop = asyncio.get_event_loop()
+
+    async def handle_events(device):
+        nonlocal vvalue
+        nonlocal loop
+
+        async for event in device.async_read_loop():
+            event = evdev.util.categorize(event)
+            if isinstance(event, evdev.events.RelEvent):
+                vvalue = vvalue + event.event.value * 0.5
+                if vvalue < 0.5:
+                    vvalue = 0.5
+                if vvalue > 30.0:
+                    vvalue = 30.0
+                plot_voltage(vvalue)
+            elif isinstance(event, evdev.events.KeyEvent):
+                plot_voltage(vvalue, color="RED")
+                if event.keycode == "KEY_ENTER" and event.keystate == event.key_up:
+                    loop.stop()
+
+    with suspend_capturing:
+        print("Please rotate encoder to set voltage value in display.\n"
+              "Press encoder button to change text color to red and\n"
+              "depress to end test\n")
+
+        for device in InputDevices:
+            asyncio.ensure_future(handle_events(device))
+
+        loop.run_forever()
+        draw.rectangle([(0, 0),(OLEDDisplay.w, OLEDDisplay.h)], fill="BLACK")
+        OLEDDisplay.Display_Image(image)
 
 def test_OLEDDisplay_Lines(OLEDDisplay):
     """
