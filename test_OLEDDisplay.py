@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
-#pylint: disable=C0103,C0301
+#pylint: disable=C0103,C0301,R0914,R0915
 """
 Test 1.5Inch OLED Display control via SSD1351 Controller
 
@@ -12,6 +12,8 @@ Created on Sat Aug 29 22:12:34 2020
 import time
 import asyncio
 import evdev #pylint: disable=E0401
+#--------------Tree Library----------------#
+from treelib import Tree  #pylint: disable=E0401
 #--------------Image Library---------------#
 from PIL  import Image  #pylint: disable=E0401
 from PIL import ImageDraw  #pylint: disable=E0401
@@ -123,9 +125,127 @@ def test_OLEDDisplay_Menu(OLEDDisplay):
     time.sleep(0.5)
 
 @pytest.mark.interactive
+def test_OLEDDisplay_Menu_Encoder(OLEDDisplay, InputDevices, suspend_capturing):
+    """
+    Test Interaction between Display and KY40 Rotary Encoder with async encoder
+    readout using a Menu
+    """
+    image = Image.new("RGB", (OLEDDisplay.w, OLEDDisplay.h), "BLACK")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype('cambriab.ttf', 16)
+
+    menu = Tree()
+    menu.create_node('Root','root') #root
+    for i in range(5):
+        menu.create_node('Menu '+str(i),'menu_'+str(i), parent='root')
+        for j in range(4):
+            if i == 0 and j == 0:
+                mstring = 'Menu '
+            else:
+                mstring = 'Item '
+            menu.create_node(mstring+str(i)+'.'+str(j), \
+                             'menu_'+str(i)+'.'+str(j), parent='menu_'+str(i))
+        menu.create_node('Up','up_'+str(i), parent='menu_'+str(i))
+    for i in range(4):
+        menu.create_node('Item 0.0.'+str(i), 'menu_0.0.'+str(i), parent='menu_0.0')
+    menu.create_node('Up','up_0.0', parent='menu_0.0')
+    menu.create_node('Exit','menu_6', parent='root')
+    menu.show(key=lambda x: x.identifier, idhidden=False)
+
+    def plot_menu(parent, sel, color="BLUE"):
+        nonlocal font
+        nonlocal draw
+        nonlocal image
+        nonlocal menu
+
+        lines = [line.tag for line in menu.children(parent)]
+        [width, height] = map(list, zip(*[font.getsize(line) for line in lines]))
+        width = max(width)
+        height = max(height)
+        x0 = OLEDDisplay.w-width
+        y0 = 12
+        draw.rectangle([(0, 0),(OLEDDisplay.w, OLEDDisplay.h)], fill="BLACK")
+
+        draw.rectangle([(x0, y0 + sel*height), (OLEDDisplay.w, y0 + (sel+1)*height)], fill="WHITE")
+        for idx, line in enumerate(lines):
+            width, height = font.getsize(line)
+            draw.text((x0, y0 + idx*height), line, fill=color, font=font)
+        OLEDDisplay.Display_Image(image)
+
+    def get_menu_nodename(parent, sel):
+        return menu.children(parent)[sel].identifier
+
+    def get_menu_len(parent, sel):
+        return len(menu.siblings(get_menu_nodename(parent, sel))) + 1
+
+    def menu_has_childs(parent, sel):
+        return menu.is_branch(get_menu_nodename(parent, sel)) != []
+
+    parent = 'root'
+    selpos = 0
+    plot_menu(parent, selpos)
+
+    loop = asyncio.get_event_loop()
+
+    async def handle_events(device):
+        nonlocal parent
+        nonlocal selpos
+        nonlocal loop
+
+        async for event in device.async_read_loop():
+            event = evdev.util.categorize(event)
+            if isinstance(event, evdev.events.RelEvent):
+                print('Rotate captured')
+                menulen = get_menu_len(parent, selpos)
+                selpos = selpos + event.event.value
+                if selpos < 0:
+                    selpos = 0
+                    print('selpos too small')
+                elif selpos >= menulen:
+                    selpos = menulen - 1
+                    print('selpos too large')
+                else:
+                    plot_menu(parent, selpos)
+                print('Position', selpos)
+            elif isinstance(event, evdev.events.KeyEvent):
+                if event.keycode == "KEY_ENTER" and event.keystate == event.key_down:
+                    print('Key-Down captured')
+                    print('Menu with childs', menu_has_childs(parent, selpos))
+                    menulen = get_menu_len(parent, selpos)
+                    if selpos == menulen - 1:
+                        if parent == 'root':
+                            loop.stop()
+                        else:
+                            # Store old parent identifier for later use
+                            oldparent = menu.get_node(parent).identifier
+                            # Assign new parent
+                            parent = menu.parent(parent).identifier
+                            # Get list of identifiers of all new menu items
+                            newnodes = [node.identifier for node in menu.children(parent)]
+                            # Assign position of old parent identifier to selpos
+                            selpos = newnodes.index(oldparent)
+                            plot_menu(parent, selpos)
+                    elif menu_has_childs(parent, selpos):
+                        parent = menu.children(parent)[selpos].identifier
+                        selpos = 0
+                        plot_menu(parent, selpos)
+
+    with suspend_capturing:
+        print("Please rotate encoder to setlect menu items in display.\n"
+              "Press encoder button to enter submenues and\n"
+              "select exit menu item to end test\n")
+        for device in InputDevices:
+            asyncio.ensure_future(handle_events(device))
+
+        loop.run_forever()
+        draw.rectangle([(0, 0),(OLEDDisplay.w, OLEDDisplay.h)], fill="BLACK")
+        OLEDDisplay.Display_Image(image)
+
+@pytest.mark.interactive
 def test_OLEDDisplay_Settings(OLEDDisplay, InputDevices, suspend_capturing):
     """
-    Test Interaction between Display and KY40 Rotary Encoder unsing async encoder readout
+    Test Interaction between Display and KY40 Rotary Encoder unsing async encoder
+    readout using a voltage setting
     """
     image = Image.new("RGB", (OLEDDisplay.w, OLEDDisplay.h), "BLACK")
     draw = ImageDraw.Draw(image)
