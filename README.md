@@ -61,7 +61,7 @@ Check if I2C is really running on 400kB/sec by executing the following script (e
 
 ```bash
 #!/bin/bash
-var="$(xxd /sys/class/i2c-adapter/i2c-1/of_node/clock-frequency | awk -F': ' '{print $2}')"
+var="$(xxd /sys/class/i2c-dev/i2c-1/device/of_node/clock-frequency | awk -F': ' '{print $2}')"
 var=${var//[[:blank:].\}]/}
 printf "%d\n" 0x$var
 ```
