@@ -45,7 +45,7 @@ The following commands have been taken from [this page](https://tutorials-raspbe
 
 Activate I2C under „Interfacing Options“ > „I2C“.
 
-In the file /boot/config.txt there should be now a line:
+In the file /boot/firmware/config.txt there should be now a line:
 
     dtparam=i2c_arm=on
     
